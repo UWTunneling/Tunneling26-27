@@ -1,0 +1,71 @@
+# STM32CubeIDE Build Artifacts
+# Build output directories
+Debug/
+Release/
+build/
+Build/
+
+# Object files and dependency files
+*.o
+*.d
+*.su
+*.cyclo
+*.su
+*.idb
+*.pdb
+
+# Executable and binary files
+*.elf
+*.bin
+*.hex
+*.map
+*.lst
+*.axf
+
+# Linker scripts (generated)
+*.ld.bak
+
+# IDE-specific files
+.metadata/
+.settings/
+# Note: .cproject and .project are tracked - they contain important project configuration
+# *.launch files can be regenerated, but keeping them for convenience
+*.cproject.bak
+*.project.bak
+
+# STM32CubeMX generated files (keep .ioc, ignore generated code markers)
+.mxproject
+
+# Temporary files
+*.tmp
+*.bak
+*~
+*.swp
+*.swo
+.DS_Store
+
+# Python cache (for send_messages.py)
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Virtual environments (if any)
+venv/
+env/
+ENV/
+
+# IDE workspace files
+*.workspace
+*.sublime-project
+*.sublime-workspace
+.vscode/
+.idea/
+
+# Log files
+*.log
+
+# System files
+Thumbs.db
+desktop.ini
