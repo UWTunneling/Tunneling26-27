@@ -1,85 +1,100 @@
 #!/usr/bin/env python3
 """
-Mock STM32 microcontroller: TCP server that speaks the binary protocol.
-Use for testing without hardware. See docs/communication_protocol.md.
+Mock TCP server: type hex to send, prints received bytes as hex (no echo).
+No protocol. Use with operator send_messages.py for simple hex testing.
 """
 
 import socket
-import sys
 import time
 import argparse
-from pathlib import Path
-
-# Protocol lives in operator/; add that folder so we import our protocol, not stdlib 'operator'
-_operator_dir = Path(__file__).resolve().parent.parent / "operator"
-if str(_operator_dir) not in sys.path:
-    sys.path.insert(0, str(_operator_dir))
-from protocol import (
-    encode,
-    extract_frames,
-    MSG_HEARTBEAT,
-    MSG_TEMPERATURE,
-)
+import select
+import threading
 
 DEFAULT_HOST = "0.0.0.0"
 DEFAULT_PORT = 8080
+RECV_TIMEOUT = 0.1
+running = True
 
 
 def log(msg: str) -> None:
-    ts = time.strftime("%H:%M:%S")
-    print(f"[{ts}] {msg}", flush=True)
+    print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
 
 
-def handle_frame(conn: socket.socket, contents: bytes) -> bytes | None:
-    """
-    Handle one received frame (contents only). Optionally return response contents to send.
-    """
-    if not contents:
+def parse_hex(line: str) -> bytes | None:
+    line = line.strip().replace(" ", "").replace(",", "")
+    if not line:
         return None
-    msg_type = contents[0]
-    if msg_type == MSG_HEARTBEAT:
-        log("<<< Heartbeat")
-        return bytes([MSG_HEARTBEAT])
-    if msg_type == MSG_TEMPERATURE:
-        # e.g. 0x10 sensor_id value — echo or send dummy temp
-        if len(contents) >= 3:
-            sensor_id, value = contents[1], contents[2]
-            log(f"<<< Temperature sensor={sensor_id} value={value}")
-        else:
-            log(f"<<< Temperature (malformed): {contents.hex()}")
-        # Reply with a dummy temperature: sensor 1, 25°C (0x19)
-        return bytes([MSG_TEMPERATURE, 0x01, 0x19])
-    log(f"<<< Unknown message type 0x{msg_type:02X}: {contents.hex()}")
-    return None
-
-
-def serve_client(conn: socket.socket, client_addr: tuple) -> None:
-    buffer = b""
     try:
-        conn.settimeout(30.0)
-        while True:
-            try:
+        return bytes.fromhex(line)
+    except ValueError:
+        return None
+
+
+def receive_loop(conn: socket.socket) -> None:
+    global running
+    conn.settimeout(RECV_TIMEOUT)
+    while running:
+        try:
+            ready = select.select([conn], [], [], RECV_TIMEOUT)
+            if ready[0]:
                 data = conn.recv(4096)
-            except socket.timeout:
+                if not data:
+                    log("Connection closed by peer")
+                    break
+                log(f"<<< {data.hex(' ')}")
+                print("You: ", end="", flush=True)
+        except (ConnectionResetError, BrokenPipeError, OSError) as e:
+            if running:
+                log(f"Receive: {e}")
+            break
+        except Exception as e:
+            if running:
+                log(f"Receive error: {e}")
+            break
+
+
+def serve_client(conn: socket.socket, addr: tuple) -> bool:
+    """Handle one client. Returns True to quit the program, False to accept next client."""
+    global running
+    running = True
+    log(f"Client connected from {addr}")
+    threading.Thread(target=receive_loop, args=(conn,), daemon=True).start()
+
+    print("Type hex to send (e.g. AA DD 01). quit = exit program.\n")
+    try:
+        while running:
+            try:
+                line = input("You: ").strip()
+            except (EOFError, KeyboardInterrupt):
+                running = False
+                conn.close()
+                return True
+            if not line:
                 continue
-            if not data:
+            if line.lower() in ("quit", "exit", "q"):
+                running = False
+                conn.close()
+                log("Quit.")
+                return True
+            raw = parse_hex(line)
+            if raw is None:
+                print("Invalid hex. Use e.g. AA DD 01 or AADD01")
+                continue
+            try:
+                conn.sendall(raw)
+                log(f">>> {raw.hex(' ')}")
+            except Exception as e:
+                log(f"Send error: {e}")
                 break
-            buffer += data
-            frames, buffer = extract_frames(buffer)
-            for contents in frames:
-                response = handle_frame(conn, contents)
-                if response is not None:
-                    frame = encode(response)
-                    conn.sendall(frame)
-                    log(f">>> Sent {len(response)} byte(s)")
-    except (ConnectionResetError, BrokenPipeError, OSError) as e:
-        log(f"Client closed: {e}")
     finally:
+        running = False
         conn.close()
+        log("Disconnected.")
+    return False
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Mock STM32 TCP server (binary protocol)")
+    parser = argparse.ArgumentParser(description="Mock TCP server (send/receive hex bytes)")
     parser.add_argument("--host", default=DEFAULT_HOST, help=f"Bind host (default {DEFAULT_HOST})")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help=f"Bind port (default {DEFAULT_PORT})")
     args = parser.parse_args()
@@ -89,16 +104,19 @@ def main() -> None:
     try:
         server.bind((args.host, args.port))
         server.listen(1)
-        log(f"Mock microcontroller listening on {args.host}:{args.port}")
-        log("Connect with your client (e.g. point BOARD_IP to this host). Ctrl+C to stop.")
+        log(f"Listening on {args.host}:{args.port}. quit or Ctrl+C to exit.")
         while True:
-            conn, addr = server.accept()
-            log(f"Client connected from {addr}")
-            serve_client(conn, addr)
+            try:
+                conn, addr = server.accept()
+            except KeyboardInterrupt:
+                break
+            if serve_client(conn, addr):
+                break
     except KeyboardInterrupt:
-        log("Stopping.")
+        pass
     finally:
         server.close()
+        log("Stopped.")
 
 
 if __name__ == "__main__":

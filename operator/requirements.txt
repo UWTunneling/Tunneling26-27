@@ -1,8 +1,7 @@
-# Python Requirements for send_messages.py
+# Python Requirements
 #
-# All dependencies are built-in Python 3.x standard library modules.
-# No external packages need to be installed.
+# CLI (send_messages.py) and GUI (send_messages_gui.py): standard library only.
+# GUI uses tkinter (included with Python on Windows/macOS/Linux).
 #
-# Minimum Python version: 3.6+
-#
-# Cross-platform support: Windows, macOS, and Linux
+# Minimum Python: 3.6+
+# Cross-platform: Windows, macOS, Linux

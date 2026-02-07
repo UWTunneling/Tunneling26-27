@@ -4,7 +4,9 @@ This project enables bidirectional Ethernet communication between a laptop and a
 
 ## Project Overview
 
-The STM32 board acts as a TCP server listening on port **8080** with the IP address **192.168.1.10**. It provides the following functionality:
+The STM32 board acts as a TCP server listening on port **8080** with the IP address **192.168.1.10**. You can also test without hardware using the **mock microcontroller** (TCP server) and **operator** (TCP client), both with CLI and GUI — see [Mock Microcontroller and Operator](#mock-microcontroller-and-operator).
+
+The board provides the following functionality:
 
 - **Echo Server**: Echoes back all messages sent from the laptop
 - **Periodic Ping**: Sends "ping" messages every 1 second to all connected clients
@@ -158,7 +160,80 @@ After the flash is complete:
 
 ---
 
-## Running the Python Communication Script
+## Mock Microcontroller and Operator
+
+You can test communication **without the STM32 board** using:
+
+- **Mock microcontroller** — A TCP server that behaves like the board (send/receive raw hex bytes).
+- **Operator** — A TCP client that connects to either the mock or the real board and sends/receives hex bytes.
+
+Both have **CLI** (terminal) and **GUI** (tkinter) versions. All use **standard library only** (no `pip install` required).
+
+### Quick start: run both GUIs
+
+From the project root:
+
+```bash
+cd Tunneling26-27
+python run_both_guis.py
+```
+
+This opens the **mock** window and the **operator** window. Then:
+
+1. In the **mock** window: click **Start** (listens on `0.0.0.0:8080`).
+2. In the **operator** window: leave host `127.0.0.1` and port `8080`, then click **Connect**.
+3. In either window: type hex bytes (e.g. `AA DD 01` or `AADD01`) and click **Send** or press Enter. Sent and received messages appear in each window’s log.
+
+Close both windows when done (or Ctrl+C in the terminal that ran `run_both_guis.py`).
+
+### Mock microcontroller
+
+| Item | Path | Description |
+|------|------|-------------|
+| **CLI** | `mock-microcontroller/mock_microcontroller.py` | Terminal server: type hex to send, see received hex. `quit` or Ctrl+C exits. |
+| **GUI** | `mock-microcontroller/mock_microcontroller_gui.py` | Same over TCP with a window: Start/Stop server, log, hex input + Send. |
+
+**CLI usage:**
+
+```bash
+python mock-microcontroller/mock_microcontroller.py
+# Optional: --host 0.0.0.0 --port 8080
+```
+
+### Operator (client)
+
+| Item | Path | Description |
+|------|------|-------------|
+| **CLI** | `operator/send_messages.py` | Terminal client: connect to host:port, type hex to send, see received hex. |
+| **GUI** | `operator/send_messages_gui.py` | Same with a window: Connect/Disconnect, log, hex input + Send. |
+
+**CLI usage (connect to mock):**
+
+```bash
+python operator/send_messages.py --host 127.0.0.1 --port 8080
+```
+
+**CLI usage (connect to real board):**
+
+```bash
+python operator/send_messages.py --host 192.168.1.10 --port 8080
+```
+
+### Summary
+
+| To… | Run |
+|-----|-----|
+| Open both GUIs at once | `python run_both_guis.py` |
+| Mock only (GUI) | `python mock-microcontroller/mock_microcontroller_gui.py` |
+| Operator only (GUI) | `python operator/send_messages_gui.py` |
+| Mock only (CLI) | `python mock-microcontroller/mock_microcontroller.py` |
+| Operator only (CLI) | `python operator/send_messages.py [--host H] [--port P]` |
+
+---
+
+## Running the Python Communication Script (real STM32 board)
+
+The script **`send_messages.py`** in the project root connects to the **real STM32 board** and uses a simple **text** protocol: echo, periodic ping, and LED commands. (For hex bytes and testing without hardware, use the **operator** and **mock microcontroller** above.)
 
 ### Prerequisites
 
@@ -276,7 +351,16 @@ Connection closed. Total messages sent: 3
 
 ## Project Files
 
-- **`send_messages.py`**: Python script for laptop communication
+- **`run_both_guis.py`**: Launches mock GUI + operator GUI in one go
+- **`send_messages.py`**: Legacy Python script (text protocol) for laptop ↔ board
+- **`operator/`**: Operator (TCP client) — hex send/receive
+  - **`send_messages.py`**: CLI client
+  - **`send_messages_gui.py`**: GUI client (tkinter)
+  - **`protocol.py`**: Binary protocol helpers (for future use)
+- **`mock-microcontroller/`**: Mock STM32 TCP server — hex send/receive
+  - **`mock_microcontroller.py`**: CLI server
+  - **`mock_microcontroller_gui.py`**: GUI server (tkinter)
+- **`docs/`**: Communication protocol and peripheral notes
 - **`STM32H745_Nucleo_M7_ETH/`**: STM32CubeIDE project folder
   - **`CM7/Core/Src/main.c`**: Main application code
   - **`CM7/LWIP/`**: LwIP stack configuration

@@ -1,0 +1,2 @@
+# GUI (mock_microcontroller_gui.py): uses tkinter (standard library).
+# No extra packages required.
