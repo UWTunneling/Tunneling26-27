@@ -10,6 +10,22 @@ import threading
 import tkinter as tk
 from tkinter import ttk
 
+from sensor_simulator import SensorSimulator, SENSOR_IDS
+
+# Display label and unit for each sensor (for GUI)
+SENSOR_LABELS: dict[str, tuple[str, str]] = {
+    "temp_1": ("Temp 1", "°C"),
+    "temp_2": ("Temp 2", "°C"),
+    "temp_3": ("Temp 3", "°C"),
+    "rpm": ("RPM", ""),
+    "voltage_1": ("480 V", "V"),
+    "voltage_2": ("120 V", "V"),
+    "voltage_3": ("5 V", "V"),
+    "current_1": ("Current 1", "A"),
+    "current_2": ("Current 2", "A"),
+    "flow_1": ("Flow 1", "L/min"),
+}
+
 
 def parse_hex(line: str) -> bytes | None:
     line = line.strip().replace(" ", "").replace(",", "")
@@ -109,6 +125,9 @@ class MockApp:
         self.root.geometry("560x420")
         self.server_thread = None
         self.conn = None
+        self.simulator = SensorSimulator(seed=None)
+        self._sensor_tick_id: str | None = None
+        self.sensor_vars: dict[str, tk.StringVar] = {}
 
         # Server
         srv = ttk.LabelFrame(self.root, text="Server", padding=6)
@@ -127,6 +146,23 @@ class MockApp:
         self.start_btn.pack(side=tk.LEFT, padx=(0, 6))
         self.stop_btn = ttk.Button(row, text="Stop", command=self.on_stop, state=tk.DISABLED)
         self.stop_btn.pack(side=tk.LEFT)
+
+        # Sensors (random state simulator) — 3 columns to use horizontal space
+        sens_f = ttk.LabelFrame(self.root, text="Sensors", padding=6)
+        sens_f.pack(fill=tk.X, padx=6, pady=6)
+        for i, sid in enumerate(SENSOR_IDS):
+            row, col = i // 3, i % 3
+            cell = ttk.Frame(sens_f)
+            cell.grid(row=row, column=col, sticky=tk.NW, padx=(0, 14), pady=2)
+            label_text, unit = SENSOR_LABELS.get(sid, (sid, ""))
+            ttk.Label(cell, text=f"{label_text}:").pack(anchor=tk.W)
+            var = tk.StringVar(value="—")
+            self.sensor_vars[sid] = var
+            val_row = ttk.Frame(cell)
+            val_row.pack(anchor=tk.W)
+            ttk.Label(val_row, textvariable=var, width=10).pack(side=tk.LEFT)
+            if unit:
+                ttk.Label(val_row, text=unit).pack(side=tk.LEFT, padx=(2, 0))
 
         # Log
         ttk.Label(self.root, text="Log (sent / received):").pack(anchor=tk.W, padx=6, pady=(6, 0))
@@ -150,6 +186,23 @@ class MockApp:
         self.send_btn.pack(side=tk.LEFT)
 
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+        self._tick_sensors()
+
+    def _tick_sensors(self) -> None:
+        """Advance simulator one tick and refresh sensor display (reschedules itself)."""
+        self.simulator.tick()
+        snap = self.simulator.get_snapshot()
+        for sid in SENSOR_IDS:
+            val = snap.get(sid, 0)
+            _, unit = SENSOR_LABELS.get(sid, (sid, ""))
+            if sid == "rpm":
+                text = f"{val:.0f}"
+            elif unit == "°C":
+                text = f"{val:.1f}"
+            else:
+                text = f"{val:.2f}"
+            self.sensor_vars[sid].set(text)
+        self._sensor_tick_id = self.root.after(200, self._tick_sensors)
 
     def log(self, msg: str):
         ts = time.strftime("%H:%M:%S")
@@ -224,6 +277,9 @@ class MockApp:
             self.send_btn.configure(state=tk.DISABLED)
 
     def on_close(self):
+        if self._sensor_tick_id is not None:
+            self.root.after_cancel(self._sensor_tick_id)
+            self._sensor_tick_id = None
         self.on_stop()
         self.root.destroy()
 

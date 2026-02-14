@@ -50,8 +50,27 @@ The message header can be any arbitrary bytes that everyone agrees on. For now w
 Message length
 To correctly identify the ending of a message we need to know how long it is. This part of the message will only be a single byte meaning we are limiting the “contents” of our message to 255 bytes long. 
 
-contents
-This section is the actual payload of the message. Within the contents there may be other protocols we use to dictate the sensor we are messaging about, how the values are structured, and potentially message types. 
+Contents
+This section is the actual payload of the message. The first byte of the contents is always the message type ID. Remaining bytes depend on the type. Multi-byte numeric values are sent big-endian (most significant byte first, network byte order).
+
+Message type IDs:
+  0x01  Ping / heartbeat
+  0x10  Temperature
+  0x11  RPM
+  0x12  Voltage
+  0x13  Current
+  0x14  Flow
+
+Sensor message format (temperature, RPM, voltage, current, flow):
+Each sensor message has: byte 1 = message type (0x10 to 0x14); byte 2 = sensor number (e.g. 0x01, 0x02, 0x03); bytes 3-4 = value as 16-bit unsigned integer, big-endian. Scale and min/max per type:
+
+  Temperature (0x10): 4 bytes contents: type 0x10, sensor (0x01/0x02/0x03), then value in 0.01 C (2 bytes big-endian). Example: 1 C = 100 = 0x00 0x64; 25 C = 2500 = 0x09 0xC4. Value range 0x0000 to 0xFFFF (65535), i.e. 0 to 655.35 C.
+  RPM (0x11): 4 bytes contents: type 0x11, sensor (0x01), then RPM as integer (2 bytes big-endian). Value range 0x0000 to 0xFFFF (65535).
+  Voltage (0x12): 4 bytes contents: type 0x12, sensor (0x01/0x02), then value in 0.01 V (2 bytes big-endian). Example: 12.50 V = 1250 = 0x04 0xE2. Value range 0x0000 to 0xFFFF (65535), i.e. 0 to 655.35 V.
+  Current (0x13): 4 bytes contents: type 0x13, sensor (0x01/0x02), then value in 0.01 A (2 bytes big-endian). Value range 0x0000 to 0xFFFF (65535), i.e. 0 to 655.35 A.
+  Flow (0x14): 4 bytes contents: type 0x14, sensor (0x01), then value in 0.01 L/min (2 bytes big-endian). Value range 0x0000 to 0xFFFF (65535), i.e. 0 to 655.35 L/min.
+
+Checksum is the low byte of the sum of all content bytes.
 
 Check sum
 A checksum is a simple error-detection method that helps verify whether data was corrupted during transmission. The sender adds together the hexadecimal values of all bytes in the message and keeps only the last byte (the lowest 8 bits) of the sum; this byte is sent as the checksum. The receiver repeats the same calculation and compares the result to the received checksum.
@@ -62,6 +81,6 @@ For example, suppose a message contains three bytes: 0x12, 0x34, and 0x56. Addin
 	
 Example messages
 For a heartbeat or ping message, the contents consist of a single byte with the value 0x01, which represents the heartbeat message type. Because the checksum is calculated using only the contents, the checksum is simply the sum of that one byte, which is also 0x01. The complete heartbeat message in hexadecimal is therefore 0xAA DD 01 01 01, where the final 0x01 is the checksum.
-For a temperature message, let’s assume the contents are three bytes long. In this example, 0x10 identifies the message as a temperature reading, 0x01 identifies sensor 1, and 0x19 represents a temperature of 25 degrees Celsius. The length byte is therefore 0x03. To compute the checksum, these three content bytes are added together: 0x10 + 0x01 + 0x19 = 0x2A, and the last byte of that sum (0x2A) is used as the checksum. The full temperature message is 0xAA DD 03 10 01 19 2A, with each field in the protocol defining how the message should be interpreted.
+For a temperature message, let’s contents are four bytes: 0x10 (type), 0x01 (sensor 1), and value 2500 (25.00 °C in 0.01 °C) as two bytes 0x09 0xC4. The length byte is 0x04. Sum of contents: 0x10 + 0x01 + 0x09 + 0xC4 = 0xDE → checksum 0xDE. The full temperature message is 0xAA DD 04 10 01 09 C4 DE, with each field defining how the message should be interpreted.
 
 
