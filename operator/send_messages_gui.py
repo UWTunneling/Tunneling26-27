@@ -30,6 +30,7 @@ class OperatorApp:
         self.sock = None
         self.recv_running = False
         self.recv_thread = None
+        self.heartbeat = False
 
         # Connection
         conn = ttk.LabelFrame(self.root, text="Connection", padding=6)
@@ -69,6 +70,11 @@ class OperatorApp:
         self.hex_edit.bind("<Return>", lambda e: self.send_hex())
         self.send_btn = ttk.Button(send_row, text="Send", command=self.send_hex, state=tk.DISABLED)
         self.send_btn.pack(side=tk.LEFT)
+
+        # Heartbeat
+        self.toggle_btn = ttk.Button(send_row, text="Heartbeat Off", command=self.toggle_button)
+        self.toggle_btn.pack(side=tk.LEFT, padx=(0, 6))
+        self.root.after(5, self.heartbeat_tick)
 
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
@@ -162,6 +168,19 @@ class OperatorApp:
     def run(self):
         self.root.mainloop()
 
+
+    def toggle_button(self):
+        self.heartbeat = not self.heartbeat
+        if self.heartbeat:
+            self.toggle_btn.config(text="Heartbeat On")
+        else:
+            self.toggle_btn.config(text="Heartbeat Off")
+    
+    def heartbeat_tick(self):
+        if self.heartbeat:
+            ts = time.strftime("%H:%M:%S")
+            self.log(f"Heartbeat: {ts}")
+        self.root.after(500, self.heartbeat_tick)
 
 def main():
     app = OperatorApp()

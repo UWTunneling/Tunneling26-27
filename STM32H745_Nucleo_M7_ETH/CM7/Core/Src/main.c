@@ -221,7 +221,7 @@ static err_t tcp_echo_accept(void *arg, struct tcp_pcb *newpcb, err_t err)
   // Set up callbacks
   tcp_arg(newpcb, es);
   tcp_recv(newpcb, tcp_echo_recv);
-  tcp_err(newpcb, tcp_echo_err);
+  //tcp_err(newpcb, tcp_echo_err);
   
   return ERR_OK;
 }
