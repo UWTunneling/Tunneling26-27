@@ -30,7 +30,10 @@ class OperatorApp:
         self.sock = None
         self.recv_running = False
         self.recv_thread = None
+        ## Heartbeat Inits
         self.heartbeat = False
+        self.ack_count = 0
+        self.fault = False
 
         # Connection
         conn = ttk.LabelFrame(self.root, text="Connection", padding=6)
@@ -72,7 +75,7 @@ class OperatorApp:
         self.send_btn.pack(side=tk.LEFT)
 
         # Heartbeat
-        self.toggle_btn = ttk.Button(send_row, text="Heartbeat Off", command=self.toggle_button)
+        self.toggle_btn = ttk.Button(send_row, text="Heartbeat Off", command=self.toggle_heartbeat)
         self.toggle_btn.pack(side=tk.LEFT, padx=(0, 6))
         self.root.after(5, self.heartbeat_tick)
 
@@ -94,7 +97,11 @@ class OperatorApp:
                 if not data:
                     break
                 hex_str = data.hex(" ")
-                self.root.after(0, lambda h=hex_str: self.log(f"Received: {h}"))
+                try:
+                    text = data.decode("ascii").strip()
+                    self.root.after(0, lambda t = text: self.on_received(t))
+                except:
+                    self.root.after(0, lambda h=hex_str: self.log(f"Received: {h}"))
             except socket.timeout:
                 continue
             except (OSError, ConnectionResetError, BrokenPipeError):
@@ -168,9 +175,21 @@ class OperatorApp:
     def run(self):
         self.root.mainloop()
 
+    def send(self, text: str):
+        if not self.sock:
+            return
+        try:
+            self.sock.sendall(text.encode("ascii"))
+            self.log(f"Sent: {text}")
+        except Exception as e:
+            self.log(f"Send error: {e}")
+            self.on_disconnect()
 
-    def toggle_button(self):
+
+    def toggle_heartbeat(self):
         self.heartbeat = not self.heartbeat
+        self.ack_count = 0
+        self.fault = False
         if self.heartbeat:
             self.toggle_btn.config(text="Heartbeat On")
         else:
@@ -179,8 +198,26 @@ class OperatorApp:
     def heartbeat_tick(self):
         if self.heartbeat:
             ts = time.strftime("%H:%M:%S")
-            self.log(f"Heartbeat: {ts}")
-        self.root.after(500, self.heartbeat_tick)
+            ##self.log(f"Heartbeat: {ts}")
+            self.send("HEARTBEAT")
+
+            self.ack_count += 1
+            if self.ack_count >= 3 and not self.fault:
+                self.fault = True
+                self.log("FAULT: 3 consecutive missed ACKs")
+                self.toggle_heartbeat()
+
+        self.root.after(200, self.heartbeat_tick)
+
+    def on_received(self, msg):
+        if msg == "ACK":
+            self.ack_count = 0
+            ##self.log("ACK received: No Fault")
+            if self.fault:
+                self.fault = False
+                self.log("FAULT CLEARED: ACK received")
+        else: 
+            self.log(f"Received: {msg}")
 
 def main():
     app = OperatorApp()
