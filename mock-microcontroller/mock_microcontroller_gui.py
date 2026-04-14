@@ -96,7 +96,12 @@ class ServerThread:
                     if not data:
                         break
                     hex_str = data.hex(" ")
-                    self.on_received(hex_str)
+                    try:
+                        text = data.decode("ascii").strip()
+                        self.on_received(text)
+                    except:
+                        self.on_received(hex_str)
+
                 except socket.timeout:
                     continue
                 except (OSError, ConnectionResetError, BrokenPipeError):
@@ -211,6 +216,16 @@ class MockApp:
         self.log_text.see(tk.END)
         self.log_text.configure(state=tk.DISABLED)
 
+    def send(self, text: str):
+            if not self.conn:
+                return
+            try:
+                self.conn.sendall(text.encode("ascii"))
+                self.log(f"Sent: {text}")
+            except Exception as e:
+                self.log(f"Send error: {e}")
+                self.conn = None
+
     def on_start(self):
         host = self.host_var.get().strip() or "0.0.0.0"
         try:
@@ -224,7 +239,10 @@ class MockApp:
             self.root.after(0, lambda: self.log("Client connected."))
 
         def on_received(hex_str):
-            self.root.after(0, lambda h=hex_str: self.log(f"Received: {h}"))
+            if hex_str.lower() == "heartbeat":
+                self.send("ACK")
+            else:
+                self.root.after(0, lambda h=hex_str: self.log(f"Received: {h}"))
 
         def on_stopped():
             self.conn = None
