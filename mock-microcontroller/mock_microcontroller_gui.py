@@ -133,6 +133,8 @@ class MockApp:
         self.simulator = SensorSimulator(seed=None)
         self._sensor_tick_id: str | None = None
         self.sensor_vars: dict[str, tk.StringVar] = {}
+        self.respondAck = False
+        self.ack_count = 0
 
         # Server
         srv = ttk.LabelFrame(self.root, text="Server", padding=6)
@@ -151,6 +153,10 @@ class MockApp:
         self.start_btn.pack(side=tk.LEFT, padx=(0, 6))
         self.stop_btn = ttk.Button(row, text="Stop", command=self.on_stop, state=tk.DISABLED)
         self.stop_btn.pack(side=tk.LEFT)
+
+        #Ack
+        self.toggle_btn = ttk.Button(row, text="Ack Off", command=self.toggle_ack)
+        self.toggle_btn.pack(side=tk.LEFT, padx=(0, 6))
 
         # Sensors (random state simulator) — 3 columns to use horizontal space
         sens_f = ttk.LabelFrame(self.root, text="Sensors", padding=6)
@@ -239,7 +245,12 @@ class MockApp:
             self.root.after(0, lambda: self.log("Client connected."))
 
         def on_received(hex_str):
-            if hex_str.lower() == "heartbeat":
+            if self.respondAck == False: 
+                self.ack_count += 1
+                self.log("Missed Heartbeat")
+                if self.ack_count >= 3:
+                    self.log("Fault 3 Consecutive Missed ACKs")
+            elif hex_str.lower() == "heartbeat":
                 self.send("ACK")
             else:
                 self.root.after(0, lambda h=hex_str: self.log(f"Received: {h}"))
@@ -304,6 +315,13 @@ class MockApp:
     def run(self):
         self.root.mainloop()
 
+    def toggle_ack(self):
+        self.ack_count = 0
+        self.respondAck = not self.respondAck
+        if self.respondAck:
+            self.toggle_btn.config(text="Ack On")
+        else:
+            self.toggle_btn.config(text="Ack Off")
 
 def main():
     app = MockApp()
