@@ -44,11 +44,13 @@ def parse_hex(line: str) -> bytes | None:
 
 
 class ServerThread:
-    def __init__(self, host: str, port: int, on_connected, on_received, on_stopped):
+    def __init__(self, host: str, port: int, on_connected, on_received,
+                 on_client_disconnected, on_stopped):
         self.host = host
         self.port = port
         self.on_connected = on_connected
         self.on_received = on_received
+        self.on_client_disconnected = on_client_disconnected
         self.on_stopped = on_stopped
         self._running = True
         self._conn = None
@@ -113,6 +115,10 @@ class ServerThread:
             except Exception:
                 pass
             self._conn = None
+            # Only fire the callback when the client dropped; not when we
+            # deliberately stopped the server (self._running will be False then).
+            if self._running:
+                self.on_client_disconnected()
         try:
             if self._server:
                 self._server.close()
@@ -292,11 +298,20 @@ class MockApp:
                         self.log(f"  → {desc}")
             self.root.after(0, update)
 
+        def on_client_disconnected():
+            def update():
+                self.conn = None
+                self.send_btn.configure(state=tk.DISABLED)
+                self.log("Client disconnected.")
+            self.root.after(0, update)
+
         def on_stopped():
             self.conn = None
             self.root.after(0, self._on_stopped)
 
-        self.server_thread = ServerThread(host, port, on_connected, on_received, on_stopped)
+        self.server_thread = ServerThread(
+            host, port, on_connected, on_received, on_client_disconnected, on_stopped
+        )
         self.server_thread.start()
         self._check_connection_health()
         self.start_btn.configure(state=tk.DISABLED)

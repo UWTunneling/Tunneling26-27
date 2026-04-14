@@ -114,6 +114,11 @@ class OperatorApp:
             except Exception:
                 break
 
+        # If recv_running is still True we didn't disconnect deliberately —
+        # the server dropped the connection.
+        if self.recv_running:
+            self.root.after(0, lambda: self.log("Connection lost — server disconnected."))
+
     def _send_heartbeat(self) -> None:
         """Send a ping frame and reschedule; stops automatically when disconnected."""
         if not self.sock:
