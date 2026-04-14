@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-Mock TCP server: type hex to send, prints received bytes as hex (no echo).
-No protocol. Use with operator send_messages.py for simple hex testing.
+Mock microcontroller: owns the sensor state (via SensorSimulator) and a
+TCP server. Exposes MockMicrocontroller for programmatic use (e.g. the GUI)
+and a CLI runner via `python mock_microcontroller.py`.
 """
 
 import socket
@@ -10,9 +11,53 @@ import argparse
 import select
 import threading
 
+from sensor_simulator import SENSOR_IDS, SensorSimulator
+
 DEFAULT_HOST = "0.0.0.0"
 DEFAULT_PORT = 8080
+DEFAULT_POLL_HZ = 10.0
 RECV_TIMEOUT = 0.1
+
+
+class MockMicrocontroller:
+    """Owns a SensorSimulator and polls it on a daemon thread at poll_hz."""
+
+    def __init__(self, poll_hz: float = DEFAULT_POLL_HZ):
+        self._poll_hz = poll_hz
+        self._sim = SensorSimulator(seed=None)
+        self._readings: dict[str, float] = self._sim.get_snapshot()
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        if self._thread and self._thread.is_alive():
+            return
+        self._sim.start()
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread:
+            self._thread.join(timeout=1.5)
+            self._thread = None
+        self._sim.stop()
+
+    def get_readings(self) -> dict[str, float]:
+        with self._lock:
+            return dict(self._readings)
+
+    def _run(self) -> None:
+        period = 1.0 / self._poll_hz
+        while not self._stop.is_set():
+            snap = self._sim.get_snapshot()
+            with self._lock:
+                self._readings = snap
+            self._stop.wait(timeout=period)
+
+
 running = True
 
 
@@ -53,14 +98,14 @@ def receive_loop(conn: socket.socket) -> None:
             break
 
 
-def serve_client(conn: socket.socket, addr: tuple) -> bool:
+def serve_client(conn: socket.socket, addr: tuple, mcu: MockMicrocontroller) -> bool:
     """Handle one client. Returns True to quit the program, False to accept next client."""
     global running
     running = True
     log(f"Client connected from {addr}")
     threading.Thread(target=receive_loop, args=(conn,), daemon=True).start()
 
-    print("Type hex to send (e.g. AA DD 01). quit = exit program.\n")
+    print("Type hex to send (e.g. AA DD 01). 'sensors' = show readings. quit = exit program.\n")
     try:
         while running:
             try:
@@ -76,6 +121,11 @@ def serve_client(conn: socket.socket, addr: tuple) -> bool:
                 conn.close()
                 log("Quit.")
                 return True
+            if line.lower() == "sensors":
+                snap = mcu.get_readings()
+                parts = [f"{sid}={snap.get(sid, 0):.2f}" for sid in SENSOR_IDS]
+                log("sensors: " + ", ".join(parts))
+                continue
             raw = parse_hex(line)
             if raw is None:
                 print("Invalid hex. Use e.g. AA DD 01 or AADD01")
@@ -97,25 +147,30 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Mock TCP server (send/receive hex bytes)")
     parser.add_argument("--host", default=DEFAULT_HOST, help=f"Bind host (default {DEFAULT_HOST})")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help=f"Bind port (default {DEFAULT_PORT})")
+    parser.add_argument("--poll-hz", type=float, default=DEFAULT_POLL_HZ, help=f"Sensor poll rate in Hz (default {DEFAULT_POLL_HZ})")
     args = parser.parse_args()
+
+    mcu = MockMicrocontroller(poll_hz=args.poll_hz)
+    mcu.start()
 
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     try:
         server.bind((args.host, args.port))
         server.listen(1)
-        log(f"Listening on {args.host}:{args.port}. quit or Ctrl+C to exit.")
+        log(f"Listening on {args.host}:{args.port}. Polling sensors at {args.poll_hz} Hz. quit or Ctrl+C to exit.")
         while True:
             try:
                 conn, addr = server.accept()
             except KeyboardInterrupt:
                 break
-            if serve_client(conn, addr):
+            if serve_client(conn, addr, mcu):
                 break
     except KeyboardInterrupt:
         pass
     finally:
         server.close()
+        mcu.stop()
         log("Stopped.")
 
 
