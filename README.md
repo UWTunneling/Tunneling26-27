@@ -169,22 +169,23 @@ You can test communication **without the STM32 board** using:
 
 Both have **CLI** (terminal) and **GUI** (tkinter) versions. All use **standard library only** (no `pip install` required).
 
-### Quick start: run both GUIs
+### Quick start: start the sim system
 
 From the project root:
 
 ```bash
 cd Tunneling26-27
-python run_both_guis.py
+python start_sim_system.py
 ```
 
-This opens the **mock** window and the **operator** window. Then:
+This opens three windows: **mock microcontroller**, **sensor control panel**, and **operator**. Then:
 
 1. In the **mock** window: click **Start** (listens on `0.0.0.0:8080`).
 2. In the **operator** window: leave host `127.0.0.1` and port `8080`, then click **Connect**.
 3. In either window: type hex bytes (e.g. `AA DD 01` or `AADD01`) and click **Send** or press Enter. Sent and received messages appear in each window’s log.
+4. Use the **sensor control panel** to adjust simulator setpoints, noise, and step sizes, or inject faults.
 
-Close both windows when done (or Ctrl+C in the terminal that ran `run_both_guis.py`).
+Close the windows when done (or Ctrl+C in the terminal that ran `start_sim_system.py`).
 
 ### Mock microcontroller
 
@@ -223,7 +224,8 @@ python operator/send_messages.py --host 192.168.1.10 --port 8080
 
 | To… | Run |
 |-----|-----|
-| Open both GUIs at once | `python run_both_guis.py` |
+| Start the full sim system (all 3 GUIs) | `python start_sim_system.py` |
+| Sensor control panel only | `python mock-microcontroller/sensor_panel.py` |
 | Mock only (GUI) | `python mock-microcontroller/mock_microcontroller_gui.py` |
 | Operator only (GUI) | `python operator/send_messages_gui.py` |
 | Mock only (CLI) | `python mock-microcontroller/mock_microcontroller.py` |
@@ -351,15 +353,17 @@ Connection closed. Total messages sent: 3
 
 ## Project Files
 
-- **`run_both_guis.py`**: Launches mock GUI + operator GUI in one go
+- **`start_sim_system.py`**: Launches mock microcontroller GUI + sensor control panel + operator GUI
 - **`send_messages.py`**: Legacy Python script (text protocol) for laptop ↔ board
 - **`operator/`**: Operator (TCP client) — hex send/receive
   - **`send_messages.py`**: CLI client
   - **`send_messages_gui.py`**: GUI client (tkinter)
   - **`protocol.py`**: Binary protocol helpers (for future use)
 - **`mock-microcontroller/`**: Mock STM32 TCP server — hex send/receive
-  - **`mock_microcontroller.py`**: CLI server
+  - **`mock_microcontroller.py`**: CLI server (owns a `MockMicrocontroller` that polls sensors at 10 Hz)
   - **`mock_microcontroller_gui.py`**: GUI server (tkinter)
+  - **`sensor_simulator.py`**: Mean-reverting sensor model with runtime controls
+  - **`sensor_panel.py`**: Tk control panel for the simulator (setpoints, noise, faults)
 - **`docs/`**: Communication protocol and peripheral notes
 - **`STM32H745_Nucleo_M7_ETH/`**: STM32CubeIDE project folder
   - **`CM7/Core/Src/main.c`**: Main application code

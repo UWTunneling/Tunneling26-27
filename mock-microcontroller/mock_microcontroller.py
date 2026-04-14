@@ -15,16 +15,21 @@ from sensor_simulator import SENSOR_IDS, SensorSimulator
 
 DEFAULT_HOST = "0.0.0.0"
 DEFAULT_PORT = 8080
-DEFAULT_POLL_HZ = 10.0
+DEFAULT_POLL_HZ = 3.0
 RECV_TIMEOUT = 0.1
 
 
 class MockMicrocontroller:
     """Owns a SensorSimulator and polls it on a daemon thread at poll_hz."""
 
-    def __init__(self, poll_hz: float = DEFAULT_POLL_HZ):
+    def __init__(self, poll_hz: float = DEFAULT_POLL_HZ, simulator: SensorSimulator | None = None):
         self._poll_hz = poll_hz
-        self._sim = SensorSimulator(seed=None)
+        if simulator is None:
+            self._sim = SensorSimulator(seed=None)
+            self._owns_sim = True
+        else:
+            self._sim = simulator
+            self._owns_sim = False
         self._readings: dict[str, float] = self._sim.get_snapshot()
         self._lock = threading.Lock()
         self._stop = threading.Event()
@@ -33,7 +38,6 @@ class MockMicrocontroller:
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
             return
-        self._sim.start()
         self._stop.clear()
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
@@ -43,7 +47,6 @@ class MockMicrocontroller:
         if self._thread:
             self._thread.join(timeout=1.5)
             self._thread = None
-        self._sim.stop()
 
     def get_readings(self) -> dict[str, float]:
         with self._lock:
@@ -52,6 +55,8 @@ class MockMicrocontroller:
     def _run(self) -> None:
         period = 1.0 / self._poll_hz
         while not self._stop.is_set():
+            if self._owns_sim:
+                self._sim.tick()
             snap = self._sim.get_snapshot()
             with self._lock:
                 self._readings = snap
