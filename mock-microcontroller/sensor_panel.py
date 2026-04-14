@@ -198,12 +198,12 @@ class SensorRow:
 #   ── Main application
 
 class SensorControlApp:
-    def __init__(self):
-        self.root = tk.Tk()
+    def __init__(self, root: tk.Misc | None = None, simulator: SensorSimulator | None = None):
+        self.root = root if root is not None else tk.Tk()
         self.root.title("Sensor simulator — control panel")
         self.root.resizable(True, True)
 
-        self.sim = SensorSimulator(seed=None)
+        self.sim = simulator if simulator is not None else SensorSimulator(seed=None)
         self._tick_id: str | None = None
         self._running = False
 

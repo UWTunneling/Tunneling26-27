@@ -10,7 +10,7 @@ import threading
 import tkinter as tk
 from tkinter import ttk
 
-from sensor_simulator import SENSOR_IDS
+from sensor_simulator import SENSOR_IDS, SensorSimulator
 from mock_microcontroller import MockMicrocontroller
 
 # Display label and unit for each sensor (for GUI)
@@ -124,14 +124,14 @@ class ServerThread:
 
 
 class MockApp:
-    def __init__(self):
-        self.root = tk.Tk()
+    def __init__(self, root: tk.Misc | None = None, simulator: SensorSimulator | None = None):
+        self.root = root if root is not None else tk.Tk()
         self.root.title("Mock microcontroller — TCP server")
         self.root.minsize(480, 360)
         self.root.geometry("560x420")
         self.server_thread = None
         self.conn = None
-        self.mcu = MockMicrocontroller()
+        self.mcu = MockMicrocontroller(simulator=simulator)
         self.mcu.start()
         self._sensor_tick_id: str | None = None
         self.sensor_vars: dict[str, tk.StringVar] = {}
