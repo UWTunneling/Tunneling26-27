@@ -10,7 +10,8 @@ import threading
 import tkinter as tk
 from tkinter import ttk
 
-from sensor_simulator import SensorSimulator, SENSOR_IDS
+from sensor_simulator import SENSOR_IDS
+from mock_microcontroller import MockMicrocontroller
 
 # Display label and unit for each sensor (for GUI)
 SENSOR_LABELS: dict[str, tuple[str, str]] = {
@@ -130,7 +131,8 @@ class MockApp:
         self.root.geometry("560x420")
         self.server_thread = None
         self.conn = None
-        self.simulator = SensorSimulator(seed=None)
+        self.mcu = MockMicrocontroller()
+        self.mcu.start()
         self._sensor_tick_id: str | None = None
         self.sensor_vars: dict[str, tk.StringVar] = {}
 
@@ -194,9 +196,8 @@ class MockApp:
         self._tick_sensors()
 
     def _tick_sensors(self) -> None:
-        """Advance simulator one tick and refresh sensor display (reschedules itself)."""
-        self.simulator.tick()
-        snap = self.simulator.get_snapshot()
+        """Refresh sensor display from the mock microcontroller (reschedules itself)."""
+        snap = self.mcu.get_readings()
         for sid in SENSOR_IDS:
             val = snap.get(sid, 0)
             _, unit = SENSOR_LABELS.get(sid, (sid, ""))
@@ -298,6 +299,7 @@ class MockApp:
         if self._sensor_tick_id is not None:
             self.root.after_cancel(self._sensor_tick_id)
             self._sensor_tick_id = None
+        self.mcu.stop()
         self.on_stop()
         self.root.destroy()
 
