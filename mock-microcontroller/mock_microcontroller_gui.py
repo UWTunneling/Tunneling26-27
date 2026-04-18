@@ -9,6 +9,12 @@ import time
 import threading
 import tkinter as tk
 from tkinter import ttk
+from pathlib import Path
+import sys
+
+# Allow importing protocol.py from the project root regardless of cwd.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import protocol
 
 from sensor_simulator import SENSOR_IDS, SensorSimulator
 from mock_microcontroller import MockMicrocontroller
@@ -39,11 +45,13 @@ def parse_hex(line: str) -> bytes | None:
 
 
 class ServerThread:
-    def __init__(self, host: str, port: int, on_connected, on_received, on_stopped):
+    def __init__(self, host: str, port: int, on_connected, on_received,
+                 on_client_disconnected, on_stopped):
         self.host = host
         self.port = port
         self.on_connected = on_connected
         self.on_received = on_received
+        self.on_client_disconnected = on_client_disconnected
         self.on_stopped = on_stopped
         self._running = True
         self._conn = None
@@ -114,6 +122,10 @@ class ServerThread:
             except Exception:
                 pass
             self._conn = None
+            # Only fire the callback when the client dropped; not when we
+            # deliberately stopped the server (self._running will be False then).
+            if self._running:
+                self.on_client_disconnected()
         try:
             if self._server:
                 self._server.close()
@@ -134,7 +146,11 @@ class MockApp:
         self.mcu = MockMicrocontroller(simulator=simulator)
         self.mcu.start()
         self._sensor_tick_id: str | None = None
+        self._health_check_id: str | None = None
         self.sensor_vars: dict[str, tk.StringVar] = {}
+        self._stream_parser = protocol.StreamParser()
+        self._last_rx_time: float | None = None
+        self._connection_healthy: bool = True
 
         # Server
         srv = ttk.LabelFrame(self.root, text="Server", padding=6)
@@ -208,7 +224,47 @@ class MockApp:
             else:
                 text = f"{val:.2f}"
             self.sensor_vars[sid].set(text)
+
+        # Send all sensor readings to the connected operator.
+        if self.conn:
+            payload = b"".join([
+                protocol.encode_temperature(1, snap["temp_1"]),
+                protocol.encode_temperature(2, snap["temp_2"]),
+                protocol.encode_temperature(3, snap["temp_3"]),
+                protocol.encode_rpm(1, snap["rpm"]),
+                protocol.encode_voltage(1, snap["voltage_1"]),
+                protocol.encode_voltage(2, snap["voltage_2"]),
+                protocol.encode_voltage(3, snap["voltage_3"]),
+                protocol.encode_current(1, snap["current_1"]),
+                protocol.encode_current(2, snap["current_2"]),
+                protocol.encode_flow(1, snap["flow_1"]),
+            ])
+            self._send_bytes(payload)
+
         self._sensor_tick_id = self.root.after(200, self._tick_sensors)
+
+    def _send_bytes(self, data: bytes) -> None:
+        """Send raw bytes to the connected client (must be called from the main thread)."""
+        if not self.conn:
+            return
+        try:
+            self.conn.sendall(data)
+        except Exception as e:
+            self.log(f"Send error: {e}")
+            self.conn = None
+            self.send_btn.configure(state=tk.DISABLED)
+
+    def _check_connection_health(self) -> None:
+        """Warn once when no data has been received for >5 s; clear warning when it recovers."""
+        if self.conn and self._last_rx_time is not None:
+            age = time.time() - self._last_rx_time
+            if age > 5.0 and self._connection_healthy:
+                self._connection_healthy = False
+                self.log(f"No data from client for {age:.0f} s — connection may be lost.")
+            elif age <= 5.0 and not self._connection_healthy:
+                self._connection_healthy = True
+                self.log("Connection health restored.")
+        self._health_check_id = self.root.after(2000, self._check_connection_health)
 
     def log(self, msg: str):
         ts = time.strftime("%H:%M:%S")
@@ -236,21 +292,45 @@ class MockApp:
 
         def on_connected(conn):
             self.conn = conn
+            self._stream_parser.reset()
+            self._last_rx_time = None
+            self._connection_healthy = True
             self.root.after(0, lambda: self.send_btn.configure(state=tk.NORMAL))
             self.root.after(0, lambda: self.log("Client connected."))
 
-        def on_received(hex_str):
-            if hex_str.lower() == "heartbeat":
-                self.send("ACK")
-            else:
-                self.root.after(0, lambda h=hex_str: self.log(f"Received: {h}"))
+        def on_received(data: bytes):
+            # Parse on the server thread; dispatch decoded results to main thread.
+            msgs = self._stream_parser.feed(data)
+            hex_str = data.hex(" ")
+            self._last_rx_time = time.time()
+
+            def update(h=hex_str, m=msgs):
+                self.log(f"Recv ({len(h.replace(' ', '')) // 2} B): {h}")
+                for msg in m:
+                    desc = protocol.describe(msg)
+                    if msg.get("type") == "ping":
+                        self._send_bytes(protocol.build_ping())
+                        self.log(f"  → {desc}  (pong sent)")
+                    else:
+                        self.log(f"  → {desc}")
+            self.root.after(0, update)
+
+        def on_client_disconnected():
+            def update():
+                self.conn = None
+                self.send_btn.configure(state=tk.DISABLED)
+                self.log("Client disconnected.")
+            self.root.after(0, update)
 
         def on_stopped():
             self.conn = None
             self.root.after(0, self._on_stopped)
 
-        self.server_thread = ServerThread(host, port, on_connected, on_received, on_stopped)
+        self.server_thread = ServerThread(
+            host, port, on_connected, on_received, on_client_disconnected, on_stopped
+        )
         self.server_thread.start()
+        self._check_connection_health()
         self.start_btn.configure(state=tk.DISABLED)
         self.stop_btn.configure(state=tk.NORMAL)
         self.host_edit.configure(state=tk.DISABLED)
@@ -299,7 +379,9 @@ class MockApp:
         if self._sensor_tick_id is not None:
             self.root.after_cancel(self._sensor_tick_id)
             self._sensor_tick_id = None
-        self.mcu.stop()
+        if self._health_check_id is not None:
+            self.root.after_cancel(self._health_check_id)
+            self._health_check_id = None
         self.on_stop()
         self.root.destroy()
 

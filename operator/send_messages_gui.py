@@ -9,6 +9,12 @@ import time
 import threading
 import tkinter as tk
 from tkinter import ttk
+from pathlib import Path
+import sys
+
+# Allow importing protocol.py from the project root regardless of cwd.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import protocol
 
 
 def parse_hex(line: str) -> bytes | None:
@@ -34,6 +40,11 @@ class OperatorApp:
         self.heartbeat = False
         self.ack_count = 0
         self.fault = False
+        self._stream_parser = protocol.StreamParser()
+        self._last_rx_time: float | None = None
+        self._connection_healthy: bool = True
+        self._heartbeat_id: str | None = None
+        self._health_check_id: str | None = None
 
         # Connection
         conn = ttk.LabelFrame(self.root, text="Connection", padding=6)
@@ -93,21 +104,51 @@ class OperatorApp:
             self.sock.settimeout(0.25)
         while self.recv_running and self.sock:
             try:
-                data = self.sock.recv(1024)
+                data = self.sock.recv(4096)
                 if not data:
                     break
+                msgs = self._stream_parser.feed(data)
                 hex_str = data.hex(" ")
-                try:
-                    text = data.decode("ascii").strip()
-                    self.root.after(0, lambda t = text: self.on_received(t))
-                except:
-                    self.root.after(0, lambda h=hex_str: self.log(f"Received: {h}"))
+                self._last_rx_time = time.time()
+
+                def update(h=hex_str, m=msgs):
+                    self.log(f"Recv ({len(h.replace(' ', '')) // 2} B): {h}")
+                    for msg in m:
+                        self.log(f"  → {protocol.describe(msg)}")
+                self.root.after(0, update)
             except socket.timeout:
                 continue
             except (OSError, ConnectionResetError, BrokenPipeError):
                 break
             except Exception:
                 break
+
+        # If recv_running is still True we didn't disconnect deliberately —
+        # the server dropped the connection.
+        if self.recv_running:
+            self.root.after(0, lambda: self.log("Connection lost — server disconnected."))
+
+    def _send_heartbeat(self) -> None:
+        """Send a ping frame and reschedule; stops automatically when disconnected."""
+        if not self.sock:
+            return
+        try:
+            self.sock.sendall(protocol.build_ping())
+        except Exception:
+            pass  # on_disconnect will clean up if the connection is truly broken
+        self._heartbeat_id = self.root.after(1000, self._send_heartbeat)
+
+    def _check_connection_health(self) -> None:
+        """Warn once when no data arrives for >5 s; clear when it recovers."""
+        if self.sock and self._last_rx_time is not None:
+            age = time.time() - self._last_rx_time
+            if age > 5.0 and self._connection_healthy:
+                self._connection_healthy = False
+                self.log(f"No data from server for {age:.0f} s — connection may be lost.")
+            elif age <= 5.0 and not self._connection_healthy:
+                self._connection_healthy = True
+                self.log("Connection health restored.")
+        self._health_check_id = self.root.after(2000, self._check_connection_health)
 
     def on_connect(self):
         host = self.host_var.get().strip() or "127.0.0.1"
@@ -125,9 +166,14 @@ class OperatorApp:
                 self.sock.close()
                 self.sock = None
             return
+        self._stream_parser.reset()
+        self._last_rx_time = None
+        self._connection_healthy = True
         self.recv_running = True
         self.recv_thread = threading.Thread(target=self._recv_loop, daemon=True)
         self.recv_thread.start()
+        self._send_heartbeat()
+        self._check_connection_health()
         self.connect_btn.configure(state=tk.DISABLED)
         self.disconnect_btn.configure(state=tk.NORMAL)
         self.send_btn.configure(state=tk.NORMAL)
@@ -136,6 +182,12 @@ class OperatorApp:
         self.log("Connected.")
 
     def on_disconnect(self):
+        if self._heartbeat_id is not None:
+            self.root.after_cancel(self._heartbeat_id)
+            self._heartbeat_id = None
+        if self._health_check_id is not None:
+            self.root.after_cancel(self._health_check_id)
+            self._health_check_id = None
         self.recv_running = False
         if self.recv_thread:
             self.recv_thread.join(timeout=0.6)
