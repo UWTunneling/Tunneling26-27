@@ -9,6 +9,45 @@ import time
 import threading
 import tkinter as tk
 from tkinter import ttk
+from pathlib import Path
+import sys
+
+# Allow importing protocol.py from the project root regardless of cwd.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import protocol
+
+
+SENSOR_IDS: tuple[str, ...] = (
+    "temp_1", "temp_2", "temp_3",
+    "rpm",
+    "voltage_1", "voltage_2", "voltage_3",
+    "current_1", "current_2",
+    "flow_1",
+)
+
+SENSOR_LABELS: dict[str, tuple[str, str]] = {
+    "temp_1": ("Temp 1", "°C"),
+    "temp_2": ("Temp 2", "°C"),
+    "temp_3": ("Temp 3", "°C"),
+    "rpm": ("RPM", ""),
+    "voltage_1": ("480 V", "V"),
+    "voltage_2": ("120 V", "V"),
+    "voltage_3": ("5 V", "V"),
+    "current_1": ("Current 1", "A"),
+    "current_2": ("Current 2", "A"),
+    "flow_1": ("Flow 1", "L/min"),
+}
+
+
+def _sensor_key(msg_type: str, sensor_id: int) -> str | None:
+    """Map a decoded sensor message to the canonical sensor-id string."""
+    if msg_type == "temperature":
+        return f"temp_{sensor_id}"
+    if msg_type == "rpm":
+        return "rpm"
+    if msg_type in ("voltage", "current", "flow"):
+        return f"{msg_type}_{sensor_id}"
+    return None
 
 
 def parse_hex(line: str) -> bytes | None:
@@ -30,10 +69,21 @@ class OperatorApp:
         self.sock = None
         self.recv_running = False
         self.recv_thread = None
-        ## Heartbeat Inits
-        self.heartbeat = False
-        self.ack_count = 0
-        self.fault = False
+        # Heartbeat toggle: when True, _send_heartbeat emits a ping every 1 s.
+        self.heartbeat = True
+        self._stream_parser = protocol.StreamParser()
+        self._last_rx_time: float | None = None
+        self._connection_healthy: bool = True
+        self._heartbeat_id: str | None = None
+        self._health_check_id: str | None = None
+        # Pong tracking — independent of the sensor stream.
+        self._last_pong_time: float | None = None
+        self._heartbeat_healthy: bool = True
+        self._heartbeat_check_id: str | None = None
+
+        # Decoded sensor state — updated as frames arrive from the microcontroller.
+        self.sensor_state: dict[str, float | None] = {sid: None for sid in SENSOR_IDS}
+        self.sensor_vars: dict[str, tk.StringVar] = {}
 
         # Connection
         conn = ttk.LabelFrame(self.root, text="Connection", padding=6)
@@ -52,6 +102,23 @@ class OperatorApp:
         self.connect_btn.pack(side=tk.LEFT, padx=(0, 6))
         self.disconnect_btn = ttk.Button(row, text="Disconnect", command=self.on_disconnect, state=tk.DISABLED)
         self.disconnect_btn.pack(side=tk.LEFT)
+
+        # Sensors — values decoded from the microcontroller stream (3 columns).
+        sens_f = ttk.LabelFrame(self.root, text="Sensors", padding=6)
+        sens_f.pack(fill=tk.X, padx=6, pady=6)
+        for i, sid in enumerate(SENSOR_IDS):
+            r, c = i // 3, i % 3
+            cell = ttk.Frame(sens_f)
+            cell.grid(row=r, column=c, sticky=tk.NW, padx=(0, 14), pady=2)
+            label_text, unit = SENSOR_LABELS.get(sid, (sid, ""))
+            ttk.Label(cell, text=f"{label_text}:").pack(anchor=tk.W)
+            var = tk.StringVar(value="—")
+            self.sensor_vars[sid] = var
+            val_row = ttk.Frame(cell)
+            val_row.pack(anchor=tk.W)
+            ttk.Label(val_row, textvariable=var, width=10).pack(side=tk.LEFT)
+            if unit:
+                ttk.Label(val_row, text=unit).pack(side=tk.LEFT, padx=(2, 0))
 
         # Log
         ttk.Label(self.root, text="Log (sent / received):").pack(anchor=tk.W, padx=6, pady=(6, 0))
@@ -74,10 +141,9 @@ class OperatorApp:
         self.send_btn = ttk.Button(send_row, text="Send", command=self.send_hex, state=tk.DISABLED)
         self.send_btn.pack(side=tk.LEFT)
 
-        # Heartbeat
-        self.toggle_btn = ttk.Button(send_row, text="Heartbeat Off", command=self.toggle_heartbeat)
+        # Heartbeat toggle — label reflects current state.
+        self.toggle_btn = ttk.Button(send_row, text="Heartbeat On", command=self.toggle_heartbeat)
         self.toggle_btn.pack(side=tk.LEFT, padx=(0, 6))
-        self.root.after(5, self.heartbeat_tick)
 
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
@@ -93,21 +159,101 @@ class OperatorApp:
             self.sock.settimeout(0.25)
         while self.recv_running and self.sock:
             try:
-                data = self.sock.recv(1024)
+                data = self.sock.recv(4096)
                 if not data:
                     break
+                msgs = self._stream_parser.feed(data)
                 hex_str = data.hex(" ")
-                try:
-                    text = data.decode("ascii").strip()
-                    self.root.after(0, lambda t = text: self.on_received(t))
-                except:
-                    self.root.after(0, lambda h=hex_str: self.log(f"Received: {h}"))
+                self._last_rx_time = time.time()
+
+                def update(h=hex_str, m=msgs):
+                    self.log(f"Recv ({len(h.replace(' ', '')) // 2} B): {h}")
+                    for msg in m:
+                        if msg.get("type") == "ping":
+                            self._last_pong_time = time.time()
+                        self._apply_sensor_update(msg)
+                        self.log(f"  → {protocol.describe(msg)}")
+                    self._refresh_sensor_display()
+                self.root.after(0, update)
             except socket.timeout:
                 continue
             except (OSError, ConnectionResetError, BrokenPipeError):
                 break
             except Exception:
                 break
+
+        # If recv_running is still True we didn't disconnect deliberately —
+        # the server dropped the connection.
+        if self.recv_running:
+            self.root.after(0, lambda: self.log("Connection lost — server disconnected."))
+
+    def _apply_sensor_update(self, msg: dict) -> None:
+        """Save a decoded sensor message into self.sensor_state."""
+        if "sensor_id" not in msg or "value" not in msg:
+            return
+        sid = _sensor_key(msg.get("type", ""), msg["sensor_id"])
+        if sid is None:
+            return
+        self.sensor_state[sid] = msg["value"]
+
+    def _refresh_sensor_display(self) -> None:
+        """Redraw every sensor label from self.sensor_state."""
+        for sid in SENSOR_IDS:
+            val = self.sensor_state.get(sid)
+            if val is None:
+                self.sensor_vars[sid].set("—")
+                continue
+            _, unit = SENSOR_LABELS.get(sid, (sid, ""))
+            if sid == "rpm":
+                text = f"{val:.0f}"
+            elif unit == "°C":
+                text = f"{val:.1f}"
+            else:
+                text = f"{val:.2f}"
+            self.sensor_vars[sid].set(text)
+
+    def _send_heartbeat(self) -> None:
+        """Send a ping frame and reschedule; stops automatically when disconnected.
+
+        Skips the send when self.heartbeat is False (operator-side toggle), but
+        keeps the timer alive so toggling back on resumes transmission.
+        """
+        if not self.sock:
+            return
+        if self.heartbeat:
+            try:
+                self.sock.sendall(protocol.build_ping())
+            except Exception:
+                pass  # on_disconnect will clean up if the connection is truly broken
+        self._heartbeat_id = self.root.after(1000, self._send_heartbeat)
+
+    def _check_connection_health(self) -> None:
+        """Warn once when no data arrives for >5 s; clear when it recovers."""
+        if self.sock and self._last_rx_time is not None:
+            age = time.time() - self._last_rx_time
+            if age > 5.0 and self._connection_healthy:
+                self._connection_healthy = False
+                self.log(f"No data from server for {age:.0f} s — connection may be lost.")
+            elif age <= 5.0 and not self._connection_healthy:
+                self._connection_healthy = True
+                self.log("Connection health restored.")
+        self._health_check_id = self.root.after(2000, self._check_connection_health)
+
+    def _check_heartbeat_health(self) -> None:
+        """Fault once when no pong has arrived within 3 s of the last ping.
+
+        Runs while connected; paused while the operator-side heartbeat toggle
+        is off (no pings → no pongs expected).
+        """
+        if self.sock and self.heartbeat and self._last_pong_time is not None:
+            age = time.time() - self._last_pong_time
+            if age > 3.0 and self._heartbeat_healthy:
+                self._heartbeat_healthy = False
+                self.log(f"HEARTBEAT FAULT: no pong for {age:.1f} s.")
+            elif age <= 3.0 and not self._heartbeat_healthy:
+                self._heartbeat_healthy = True
+                self.log("Heartbeat recovered.")
+        self._heartbeat_check_id = self.root.after(1000, self._check_heartbeat_health)
 
     def on_connect(self):
         host = self.host_var.get().strip() or "127.0.0.1"
@@ -125,9 +271,21 @@ class OperatorApp:
                 self.sock.close()
                 self.sock = None
             return
+        self._stream_parser.reset()
+        self._last_rx_time = None
+        self._connection_healthy = True
+        # Seed pong-tracking so the 3 s silence counter starts now, not from
+        # whenever the previous session received its last frame.
+        self._last_pong_time = time.time()
+        self._heartbeat_healthy = True
+        self.sensor_state = {sid: None for sid in SENSOR_IDS}
+        self._refresh_sensor_display()
         self.recv_running = True
         self.recv_thread = threading.Thread(target=self._recv_loop, daemon=True)
         self.recv_thread.start()
+        self._send_heartbeat()
+        self._check_connection_health()
+        self._check_heartbeat_health()
         self.connect_btn.configure(state=tk.DISABLED)
         self.disconnect_btn.configure(state=tk.NORMAL)
         self.send_btn.configure(state=tk.NORMAL)
@@ -136,6 +294,15 @@ class OperatorApp:
         self.log("Connected.")
 
     def on_disconnect(self):
+        if self._heartbeat_id is not None:
+            self.root.after_cancel(self._heartbeat_id)
+            self._heartbeat_id = None
+        if self._health_check_id is not None:
+            self.root.after_cancel(self._health_check_id)
+            self._health_check_id = None
+        if self._heartbeat_check_id is not None:
+            self.root.after_cancel(self._heartbeat_check_id)
+            self._heartbeat_check_id = None
         self.recv_running = False
         if self.recv_thread:
             self.recv_thread.join(timeout=0.6)
@@ -175,49 +342,20 @@ class OperatorApp:
     def run(self):
         self.root.mainloop()
 
-    def send(self, text: str):
-        if not self.sock:
-            return
-        try:
-            self.sock.sendall(text.encode("ascii"))
-            self.log(f"Sent: {text}")
-        except Exception as e:
-            self.log(f"Send error: {e}")
-            self.on_disconnect()
-
-
     def toggle_heartbeat(self):
+        """Enable/disable the 1 Hz binary ping sender."""
         self.heartbeat = not self.heartbeat
-        self.ack_count = 0
-        self.fault = False
         if self.heartbeat:
+            # Reset the pong baseline so the stale timer from the off-period
+            # doesn't immediately trip a fault on re-enable.
+            self._last_pong_time = time.time()
+            self._heartbeat_healthy = True
             self.toggle_btn.config(text="Heartbeat On")
+            self.log("Heartbeat enabled.")
         else:
             self.toggle_btn.config(text="Heartbeat Off")
-    
-    def heartbeat_tick(self):
-        if self.heartbeat:
-            ts = time.strftime("%H:%M:%S")
-            ##self.log(f"Heartbeat: {ts}")
-            self.send("HEARTBEAT")
+            self.log("Heartbeat disabled.")
 
-            self.ack_count += 1
-            if self.ack_count >= 3 and not self.fault:
-                self.fault = True
-                self.log("FAULT: 3 consecutive missed ACKs")
-                self.toggle_heartbeat()
-
-        self.root.after(200, self.heartbeat_tick)
-
-    def on_received(self, msg):
-        if msg == "ACK":
-            self.ack_count = 0
-            ##self.log("ACK received: No Fault")
-            if self.fault:
-                self.fault = False
-                self.log("FAULT CLEARED: ACK received")
-        else: 
-            self.log(f"Received: {msg}")
 
 def main():
     app = OperatorApp()
