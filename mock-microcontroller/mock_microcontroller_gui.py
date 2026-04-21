@@ -104,12 +104,7 @@ class ServerThread:
                     data = conn.recv(4096)
                     if not data:
                         break
-                    hex_str = data.hex(" ")
-                    try:
-                        text = data.decode("ascii").strip()
-                        self.on_received(text)
-                    except:
-                        self.on_received(hex_str)
+                    self.on_received(data)
 
                 except socket.timeout:
                     continue
@@ -151,6 +146,13 @@ class MockApp:
         self._stream_parser = protocol.StreamParser()
         self._last_rx_time: float | None = None
         self._connection_healthy: bool = True
+        self.respondAck = True
+        self.ack_count = 0
+        # Ping-tracking — independent of the 2 Hz sensor-receive path; used
+        # to detect the operator going silent for 3 heartbeat cycles.
+        self._last_ping_time: float | None = None
+        self._heartbeat_healthy: bool = True
+        self._heartbeat_check_id: str | None = None
 
         # Server
         srv = ttk.LabelFrame(self.root, text="Server", padding=6)
@@ -169,6 +171,10 @@ class MockApp:
         self.start_btn.pack(side=tk.LEFT, padx=(0, 6))
         self.stop_btn = ttk.Button(row, text="Stop", command=self.on_stop, state=tk.DISABLED)
         self.stop_btn.pack(side=tk.LEFT)
+
+        # Ack toggle — label reflects current state.
+        self.toggle_btn = ttk.Button(row, text="Ack On", command=self.toggle_ack)
+        self.toggle_btn.pack(side=tk.LEFT, padx=(0, 6))
 
         # Sensors (random state simulator) — 3 columns to use horizontal space
         sens_f = ttk.LabelFrame(self.root, text="Sensors", padding=6)
@@ -241,7 +247,7 @@ class MockApp:
             ])
             self._send_bytes(payload)
 
-        self._sensor_tick_id = self.root.after(200, self._tick_sensors)
+        self._sensor_tick_id = self.root.after(500, self._tick_sensors)
 
     def _send_bytes(self, data: bytes) -> None:
         """Send raw bytes to the connected client (must be called from the main thread)."""
@@ -265,6 +271,21 @@ class MockApp:
                 self._connection_healthy = True
                 self.log("Connection health restored.")
         self._health_check_id = self.root.after(2000, self._check_connection_health)
+
+    def _check_heartbeat_health(self) -> None:
+        """Fault once when no ping has arrived for >3 s (3 heartbeat cycles).
+
+        Heartbeat cycle is 1 Hz on the operator side, so 3 cycles = 3 s.
+        """
+        if self.conn and self._last_ping_time is not None:
+            age = time.time() - self._last_ping_time
+            if age > 3.0 and self._heartbeat_healthy:
+                self._heartbeat_healthy = False
+                self.log(f"HEARTBEAT FAULT: no ping from operator for {age:.1f} s.")
+            elif age <= 3.0 and not self._heartbeat_healthy:
+                self._heartbeat_healthy = True
+                self.log("Heartbeat recovered.")
+        self._heartbeat_check_id = self.root.after(1000, self._check_heartbeat_health)
 
     def log(self, msg: str):
         ts = time.strftime("%H:%M:%S")
@@ -295,6 +316,10 @@ class MockApp:
             self._stream_parser.reset()
             self._last_rx_time = None
             self._connection_healthy = True
+            # Seed ping-tracking so the 3 s counter starts now, not from
+            # whatever stale time the previous client left behind.
+            self._last_ping_time = time.time()
+            self._heartbeat_healthy = True
             self.root.after(0, lambda: self.send_btn.configure(state=tk.NORMAL))
             self.root.after(0, lambda: self.log("Client connected."))
 
@@ -309,8 +334,12 @@ class MockApp:
                 for msg in m:
                     desc = protocol.describe(msg)
                     if msg.get("type") == "ping":
-                        self._send_bytes(protocol.build_ping())
-                        self.log(f"  → {desc}  (pong sent)")
+                        self._last_ping_time = time.time()
+                        if self.respondAck:
+                            self._send_bytes(protocol.build_ping())
+                            self.log(f"  → {desc}  (pong sent)")
+                        else:
+                            self.log(f"  → {desc}  (ack off, no pong)")
                     else:
                         self.log(f"  → {desc}")
             self.root.after(0, update)
@@ -318,6 +347,8 @@ class MockApp:
         def on_client_disconnected():
             def update():
                 self.conn = None
+                self._last_ping_time = None
+                self._heartbeat_healthy = True
                 self.send_btn.configure(state=tk.DISABLED)
                 self.log("Client disconnected.")
             self.root.after(0, update)
@@ -331,6 +362,7 @@ class MockApp:
         )
         self.server_thread.start()
         self._check_connection_health()
+        self._check_heartbeat_health()
         self.start_btn.configure(state=tk.DISABLED)
         self.stop_btn.configure(state=tk.NORMAL)
         self.host_edit.configure(state=tk.DISABLED)
@@ -382,12 +414,22 @@ class MockApp:
         if self._health_check_id is not None:
             self.root.after_cancel(self._health_check_id)
             self._health_check_id = None
+        if self._heartbeat_check_id is not None:
+            self.root.after_cancel(self._heartbeat_check_id)
+            self._heartbeat_check_id = None
         self.on_stop()
         self.root.destroy()
 
     def run(self):
         self.root.mainloop()
 
+    def toggle_ack(self):
+        self.ack_count = 0
+        self.respondAck = not self.respondAck
+        if self.respondAck:
+            self.toggle_btn.config(text="Ack On")
+        else:
+            self.toggle_btn.config(text="Ack Off")
 
 def main():
     app = MockApp()
