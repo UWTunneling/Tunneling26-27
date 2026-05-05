@@ -17,7 +17,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import protocol
 
 from sensor_simulator import SENSOR_IDS, SensorSimulator
-from mock_microcontroller import MockMicrocontroller, THRESHOLDS
+from mock_microcontroller import (
+    MockMicrocontroller,
+    THRESHOLDS,
+    STATE_STOP,
+    STATE_READY,
+    STATE_RUNNING,
+    STATE_NAMES,
+)
 
 # Display label and unit for each sensor (for GUI)
 SENSOR_LABELS: dict[str, tuple[str, str]] = {
@@ -31,8 +38,9 @@ SENSOR_LABELS: dict[str, tuple[str, str]] = {
     "current_1": ("Current 1", "A"),
     "current_2": ("Current 2", "A"),
     "flow_1": ("Flow 1", "L/min"),
-    "state": ("State", "state"),
 }
+
+ESTOP_HOLD_MS = 3000  # hold time required to unlatch E-Stop
 
 
 def parse_hex(line: str) -> bytes | None:
@@ -157,10 +165,11 @@ class MockApp:
         self._last_ping_time: float | None = None
         self._heartbeat_healthy: bool = True
         self._heartbeat_check_id: str | None = None
-        #State 0 = Stop, 1 = Ready, 2 = Running
-        self.hardware = False
-        self.state = 0
-        self.estop_hold_job = None
+
+        # The state machine itself lives on MockMicrocontroller. The GUI only
+        # owns the 3-second hold timer used to gate the E-Stop unlatch action.
+        self.estop_hold_job: str | None = None
+        self.mcu.add_state_listener(self._on_state_changed)
 
         # Server
         srv = ttk.LabelFrame(self.root, text="Server", padding=6)
@@ -177,20 +186,35 @@ class MockApp:
         self.port_spin.pack(side=tk.LEFT, padx=(0, 12))
         self.start_btn = ttk.Button(row, text="Start", width=6, command=self.on_start)
         self.start_btn.pack(side=tk.LEFT, padx=(0, 6))
-        #self.start_btn.bind("<ButtonPress-1>", self.estop_press)
-        #self.start_btn.bind("<ButtonRelease-1>", self.estop_release)
-        self.stop_btn = ttk.Button(row, text="Stop", width = 6, command=self.on_stop, state=tk.DISABLED)
+        self.stop_btn = ttk.Button(row, text="Stop", width=6, command=self.on_stop, state=tk.DISABLED)
         self.stop_btn.pack(side=tk.LEFT, padx=(0, 6))
 
         # Ack toggle — label reflects current state.
         self.toggle_btn = ttk.Button(row, text="Ack On", width=6, command=self.toggle_ack)
         self.toggle_btn.pack(side=tk.LEFT, padx=(0, 6))
 
-        #Estop
-        self.state_btn = ttk.Button(row, text="E-Stop", width= 6)
-        self.state_btn.pack(side=tk.LEFT, padx=(0, 6))
-        self.state_btn.bind("<ButtonPress-1>", self.estop_press)
-        self.state_btn.bind("<ButtonRelease-1>", self.estop_release)
+        # System state row: labels + hardware-start + E-Stop button
+        sys_f = ttk.LabelFrame(self.root, text="System", padding=6)
+        sys_f.pack(fill=tk.X, padx=6, pady=(0, 6))
+        sys_row = tk.Frame(sys_f)
+        sys_row.pack(fill=tk.X)
+        bold = ("TkDefaultFont", 10, "bold")
+        ttk.Label(sys_row, text="State:").pack(side=tk.LEFT)
+        self.state_var = tk.StringVar(value=STATE_NAMES[self.mcu.get_state()])
+        ttk.Label(sys_row, textvariable=self.state_var, width=10, font=bold).pack(side=tk.LEFT, padx=(4, 16))
+        ttk.Label(sys_row, text="E-Stop:").pack(side=tk.LEFT)
+        self.estop_var = tk.StringVar(value="LATCHED" if self.mcu.is_estop_latched() else "UNLATCHED")
+        ttk.Label(sys_row, textvariable=self.estop_var, width=12, font=bold).pack(side=tk.LEFT, padx=(4, 16))
+        hw_start_state = tk.NORMAL if self.mcu.get_state() == STATE_READY else tk.DISABLED
+        self.hw_start_btn = ttk.Button(
+            sys_row, text="Hardware Start", command=self.on_hardware_start, state=hw_start_state
+        )
+        self.hw_start_btn.pack(side=tk.LEFT, padx=(0, 6))
+        # E-Stop button: 3-second hold to unlatch (STOP→READY); single press to latch (READY/RUNNING→STOP).
+        self.estop_btn = ttk.Button(sys_row, text="E-Stop", width=8)
+        self.estop_btn.pack(side=tk.LEFT)
+        self.estop_btn.bind("<ButtonPress-1>", self.estop_press)
+        self.estop_btn.bind("<ButtonRelease-1>", self.estop_release)
 
         # Sensors (random state simulator) — 3 columns to use horizontal space
         sens_f = ttk.LabelFrame(self.root, text="Sensors", padding=6)
@@ -283,7 +307,6 @@ class MockApp:
                 protocol.encode_current(1, snap["current_1"]),
                 protocol.encode_current(2, snap["current_2"]),
                 protocol.encode_flow(1, snap["flow_1"]),
-                #protocol.encode_state(1, self.state),
             ])
             self._send_bytes(payload)
 
@@ -319,9 +342,7 @@ class MockApp:
         """
         if self.conn and self._last_ping_time is not None:
             age = time.time() - self._last_ping_time
-            if age > 3.0 and self.state == 0:
-                self.log(f"In Stop State")
-            elif age > 3.0 and self._heartbeat_healthy:
+            if age > 3.0 and self._heartbeat_healthy:
                 self._heartbeat_healthy = False
                 self.log(f"HEARTBEAT FAULT: no ping from operator for {age:.1f} s.")
             elif age <= 3.0 and not self._heartbeat_healthy:
@@ -348,19 +369,12 @@ class MockApp:
 
     def on_start(self):
         host = self.host_var.get().strip() or "0.0.0.0"
-        self.hardware = True
         try:
             port = int(self.port_var.get())
         except tk.TclError:
             port = 8080
 
         def on_connected(conn):
-            #if self.state == 0:
-            #    try:
-            #        conn.close()
-            #    except:
-            #        pass
-            #    return False
             self.conn = conn
             self._stream_parser.reset()
             self._last_rx_time = None
@@ -384,9 +398,7 @@ class MockApp:
                     desc = protocol.describe(msg)
                     if msg.get("type") == "ping":
                         self._last_ping_time = time.time()
-                        if self.state == 0:
-                            self.on_stop
-                        elif self.respondAck:
+                        if self.respondAck:
                             self._send_bytes(protocol.build_ping())
                             self.log(f"  → {desc}  (pong sent)")
                         else:
@@ -412,17 +424,13 @@ class MockApp:
             host, port, on_connected, on_received, on_client_disconnected, on_stopped
         )
         self.server_thread.start()
+        self._check_connection_health()
+        self._check_heartbeat_health()
         self.start_btn.configure(state=tk.DISABLED)
         self.stop_btn.configure(state=tk.NORMAL)
         self.host_edit.configure(state=tk.DISABLED)
         self.port_spin.configure(state=tk.DISABLED)
         self.log(f"Listening on {host}:{port}.")
-        
-        if self.state == 0:
-            on_client_disconnected
-        else: 
-            self._check_connection_health()
-            self._check_heartbeat_health()
 
     def _on_stopped(self):
         self.conn = None
@@ -432,7 +440,6 @@ class MockApp:
         self.host_edit.configure(state=tk.NORMAL)
         self.port_spin.configure(state=tk.NORMAL)
         self.server_thread = None
-        self.toggle_state(0)
         self.log("Server stopped.")
 
     def on_stop(self):
@@ -445,7 +452,6 @@ class MockApp:
         self.stop_btn.configure(state=tk.DISABLED)
         self.host_edit.configure(state=tk.NORMAL)
         self.port_spin.configure(state=tk.NORMAL)
-        self.toggle_state(0)
         self.log("Server stopped.")
 
     def send_hex(self):
@@ -474,13 +480,9 @@ class MockApp:
         if self._heartbeat_check_id is not None:
             self.root.after_cancel(self._heartbeat_check_id)
             self._heartbeat_check_id = None
-        if self._conn:
-            try:
-                self._conn.close()
-            except:
-                pass
-        self._conn = None
-
+        if self.estop_hold_job is not None:
+            self.root.after_cancel(self.estop_hold_job)
+            self.estop_hold_job = None
         self.on_stop()
         self.root.destroy()
 
@@ -496,48 +498,50 @@ class MockApp:
             self.toggle_btn.config(text="Ack Off")
 
 
-    def estop_press(self, event):
-        # Start a 3-second timer
-        if self.state == 0:
-            self.estop_hold_job = self.root.after(3000, self.estop_trigger)
-        else:
-            self.toggle_state(0)
-            self.hardware = False
-        
+    # ----- State machine view -----------------------------------------------
+    #
+    # All transitions are decided by MockMicrocontroller. The GUI only owns
+    # the 3-second E-Stop hold timer (a UI affordance) and reacts to state
+    # changes via the listener below.
 
+    def _on_state_changed(self, new_state: int, latched: bool) -> None:
+        """Listener registered with the MCU. Updates UI and notifies the operator."""
+        def update():
+            self.state_var.set(STATE_NAMES[new_state])
+            self.estop_var.set("LATCHED" if latched else "UNLATCHED")
+            self.hw_start_btn.configure(
+                state=tk.NORMAL if new_state == STATE_READY else tk.DISABLED
+            )
+            self.log(f"State: {STATE_NAMES[new_state]}  (E-Stop {'LATCHED' if latched else 'UNLATCHED'})")
+            if self.conn:
+                if new_state == STATE_STOP:
+                    self._send_bytes(protocol.encode_estop())
+                elif new_state == STATE_READY:
+                    self._send_bytes(protocol.encode_ready())
+                elif new_state == STATE_RUNNING:
+                    self._send_bytes(protocol.encode_running())
+        # Listeners may be invoked from any thread; marshal onto the main thread.
+        self.root.after(0, update)
+
+    def estop_press(self, event):
+        if self.mcu.is_estop_latched():
+            # Latched → require 3 s hold to unlatch (STOP → READY)
+            self.estop_hold_job = self.root.after(ESTOP_HOLD_MS, self._estop_unlatch)
+        else:
+            # Unlatched → instant latch (any state → STOP)
+            self.mcu.latch_estop()
 
     def estop_release(self, event):
-        # If released early, cancel the timer
         if self.estop_hold_job is not None:
             self.root.after_cancel(self.estop_hold_job)
             self.estop_hold_job = None
 
-    def estop_trigger(self):
-        # Only fires if held for full 3 seconds
-        if self.hardware:
-            self.toggle_state(1)
+    def _estop_unlatch(self):
         self.estop_hold_job = None
+        self.mcu.unlatch_estop()
 
-    def toggle_hardware(self):
-        self.hardware = not self.hardware
-    
-    def toggle_state(self, newState):
-        old = self.state
-        self.state = newState
-        self.log(f"State Change: {old} → {newState}")
-        if newState == 0:
-            if self.server_thread:
-                self.server_thread.stop()
-                self.server_thread = None
-            self.conn = None
-            self.send_btn.configure(state=tk.DISABLED)
-            self.start_btn.configure(state=tk.NORMAL)
-            self.stop_btn.configure(state=tk.DISABLED)
-            self.host_edit.configure(state=tk.NORMAL)
-            self.port_spin.configure(state=tk.NORMAL)
-        elif newState == 1:
-            self.on_start
-        
+    def on_hardware_start(self):
+        self.mcu.hardware_start()
 
 
 def main():

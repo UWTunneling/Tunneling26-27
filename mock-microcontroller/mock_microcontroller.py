@@ -10,6 +10,7 @@ import time
 import argparse
 import select
 import threading
+from typing import Callable
 
 from sensor_simulator import SENSOR_IDS, SensorSimulator
 
@@ -17,6 +18,20 @@ DEFAULT_HOST = "0.0.0.0"
 DEFAULT_PORT = 8080
 DEFAULT_POLL_HZ = 3.0
 RECV_TIMEOUT = 0.1
+
+# System state machine.  Boot → STOP, E-Stop latched.
+# Transitions: STOP --(unlatch)--> READY --(hardware_start)--> RUNNING --(latch)--> STOP
+STATE_STOP    = 0
+STATE_READY   = 1
+STATE_RUNNING = 2
+STATE_NAMES: dict[int, str] = {
+    STATE_STOP:    "STOP",
+    STATE_READY:   "READY",
+    STATE_RUNNING: "RUNNING",
+}
+
+# Listener signature: fn(new_state: int, estop_latched: bool) -> None
+StateListener = Callable[[int, bool], None]
 
 # Operational thresholds enforced by the microcontroller. A reading outside
 # its (lo, hi) band is considered an out-of-range fault — independent of the
@@ -51,6 +66,10 @@ class MockMicrocontroller:
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        # State machine — owned by the MCU, not the UI.
+        self._state: int = STATE_STOP
+        self._estop_latched: bool = True
+        self._listeners: list[StateListener] = []
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -81,6 +100,44 @@ class MockMicrocontroller:
         with self._lock:
             snap = dict(self._readings)
         return [sid for sid in SENSOR_IDS if not THRESHOLDS[sid][0] <= snap[sid] <= THRESHOLDS[sid][1]]
+
+    # ---- State machine -----------------------------------------------------
+
+    def get_state(self) -> int:
+        return self._state
+
+    def is_estop_latched(self) -> bool:
+        return self._estop_latched
+
+    def add_state_listener(self, fn: StateListener) -> None:
+        """Register a callback invoked after every state or latch change."""
+        self._listeners.append(fn)
+
+    def _set(self, state: int, latched: bool) -> bool:
+        """Apply a (state, latched) update; notify listeners if anything changed."""
+        if state == self._state and latched == self._estop_latched:
+            return False
+        self._state = state
+        self._estop_latched = latched
+        for fn in self._listeners:
+            fn(state, latched)
+        return True
+
+    def unlatch_estop(self) -> bool:
+        """STOP + latched → READY + unlatched. Returns True if the transition occurred."""
+        if self._state == STATE_STOP and self._estop_latched:
+            return self._set(STATE_READY, False)
+        return False
+
+    def latch_estop(self) -> bool:
+        """Any state → STOP + latched. Returns True if anything changed."""
+        return self._set(STATE_STOP, True)
+
+    def hardware_start(self) -> bool:
+        """READY → RUNNING. Returns True if the transition occurred."""
+        if self._state == STATE_READY and not self._estop_latched:
+            return self._set(STATE_RUNNING, False)
+        return False
 
     def _run(self) -> None:
         period = 1.0 / self._poll_hz
