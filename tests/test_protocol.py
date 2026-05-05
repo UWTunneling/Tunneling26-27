@@ -232,5 +232,139 @@ class TestChecksum(unittest.TestCase):
         self.assertEqual(frame[-1], computed)
 
 
+# ---------------------------------------------------------------------------
+# State transition round-trip tests
+# ---------------------------------------------------------------------------
+
+class TestStateTransitionRoundTrip(unittest.TestCase):
+
+    def _round_trip(self, encode_fn, expected_reason, expected_end_state):
+        """Encode initial + ack, decode both, check fields."""
+        for is_ack in (False, True):
+            frame = encode_fn(is_ack=is_ack)
+            reason, end_state, got_ack = protocol.decode_state_transition(frame.hex(" "))
+            self.assertEqual(reason, expected_reason)
+            self.assertEqual(end_state, expected_end_state)
+            self.assertEqual(got_ack, is_ack)
+
+    def test_bootup(self):
+        self._round_trip(protocol.encode_bootup, "bootup", "stop")
+
+    def test_estop(self):
+        self._round_trip(protocol.encode_estop, "e-stop", "stop")
+
+    def test_software_stop(self):
+        self._round_trip(protocol.encode_software_stop, "software stop", "stop")
+
+    def test_critical_sensor(self):
+        self._round_trip(protocol.encode_critical_sensor, "critical sensor", "stop")
+
+    def test_comm_fail(self):
+        self._round_trip(protocol.encode_comm_fail, "comm fail", "stop")
+
+    def test_ready(self):
+        self._round_trip(protocol.encode_ready, "ready", "ready")
+
+    def test_running(self):
+        self._round_trip(protocol.encode_running, "running", "running")
+
+    def test_initial_tag_is_false(self):
+        """Default (no args) produces an initial message, not an ack."""
+        _, _, is_ack = protocol.decode_state_transition(protocol.encode_estop().hex())
+        self.assertFalse(is_ack)
+
+    def test_ack_tag_is_true(self):
+        _, _, is_ack = protocol.decode_state_transition(
+            protocol.encode_ready(is_ack=True).hex()
+        )
+        self.assertTrue(is_ack)
+
+    def test_decode_without_spaces(self):
+        frame = protocol.encode_running()
+        reason, end_state, is_ack = protocol.decode_state_transition(frame.hex())
+        self.assertEqual(reason, "running")
+        self.assertEqual(end_state, "running")
+
+    def test_returns_tuple_of_three(self):
+        result = protocol.decode_state_transition(protocol.encode_bootup().hex())
+        self.assertIsInstance(result, tuple)
+        self.assertEqual(len(result), 3)
+
+    def test_encode_returns_bytes(self):
+        self.assertIsInstance(protocol.encode_estop(), bytes)
+
+    def test_frame_length(self):
+        """State transition frames are always 7 bytes: AA DD 03 02 reason tag cs."""
+        frame = protocol.encode_ready()
+        self.assertEqual(len(frame), 7)
+
+    def test_known_byte_sequence_estop_initial(self):
+        """Verify exact bytes: AA DD 03 02 01 00, checksum = 02+01+00 = 03."""
+        frame = protocol.encode_estop(is_ack=False)
+        self.assertEqual(frame, bytes.fromhex("AADD03020100" + "03"))
+
+    def test_known_byte_sequence_ready_ack(self):
+        """Verify exact bytes: AA DD 03 02 05 01, checksum = 02+05+01 = 08."""
+        frame = protocol.encode_ready(is_ack=True)
+        self.assertEqual(frame, bytes.fromhex("AADD03020501" + "08"))
+
+    def test_streamparser_decodes_state_transition(self):
+        """StreamParser.feed() should return state transition dicts inline."""
+        parser = protocol.StreamParser()
+        msgs = parser.feed(protocol.encode_estop())
+        self.assertEqual(len(msgs), 1)
+        self.assertEqual(msgs[0]["type"], "state_transition")
+        self.assertEqual(msgs[0]["reason"], "e-stop")
+        self.assertEqual(msgs[0]["end_state"], "stop")
+        self.assertFalse(msgs[0]["is_ack"])
+
+    def test_decode_rejects_state_transition_message(self):
+        """decode() (sensor decoder) must reject a state transition frame."""
+        with self.assertRaises(ProtocolError):
+            protocol.decode(protocol.encode_estop().hex())
+
+
+# ---------------------------------------------------------------------------
+# State transition decode error tests
+# ---------------------------------------------------------------------------
+
+class TestStateTransitionDecodeErrors(unittest.TestCase):
+
+    def test_wrong_message_type(self):
+        """Passing a sensor frame to decode_state_transition() raises ProtocolError."""
+        with self.assertRaises(ProtocolError):
+            protocol.decode_state_transition(
+                protocol.encode("temperature", 1, 25.0).hex()
+            )
+
+    def test_bad_checksum(self):
+        frame = bytearray(protocol.encode_estop())
+        frame[-1] ^= 0xFF
+        with self.assertRaises(ProtocolError):
+            protocol.decode_state_transition(bytes(frame).hex())
+
+    def test_unknown_reason_byte(self):
+        # Craft a frame with reason 0xFF (undefined)
+        content = bytes([protocol.MSG_STATE_TRANSITION, 0xFF, 0x00])
+        frame = protocol.build_message(content)
+        with self.assertRaises(ProtocolError):
+            protocol.decode_state_transition(frame.hex())
+
+    def test_invalid_tag_byte(self):
+        # tag byte must be 0x00 or 0x01; use 0x02
+        content = bytes([protocol.MSG_STATE_TRANSITION, protocol.STATE_READY, 0x02])
+        frame = protocol.build_message(content)
+        with self.assertRaises(ProtocolError):
+            protocol.decode_state_transition(frame.hex())
+
+    def test_too_short(self):
+        with self.assertRaises(ProtocolError):
+            protocol.decode_state_transition("AA DD")
+
+    def test_empty_string(self):
+        with self.assertRaises(ProtocolError):
+            protocol.decode_state_transition("")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
