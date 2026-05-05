@@ -10,26 +10,48 @@ Message format (all values big-endian / network byte order):
     Checksum: 1 byte     — low byte of the sum of all content bytes
 
 Message type IDs (first byte of content):
-    0x01  Ping / heartbeat   content = [0x01]
-    0x10  Temperature        content = [0x10, sensor_id, value_hi, value_lo]
-    0x11  RPM                content = [0x11, sensor_id, value_hi, value_lo]
-    0x12  Voltage            content = [0x12, sensor_id, value_hi, value_lo]
-    0x13  Current            content = [0x13, sensor_id, value_hi, value_lo]
-    0x14  Flow               content = [0x14, sensor_id, value_hi, value_lo]
+    0x01  Ping / heartbeat      content = [0x01]
+    0x02  State transition       content = [0x02, reason, tag]
+    0x10  Temperature           content = [0x10, sensor_id, value_hi, value_lo]
+    0x11  RPM                   content = [0x11, sensor_id, value_hi, value_lo]
+    0x12  Voltage               content = [0x12, sensor_id, value_hi, value_lo]
+    0x13  Current               content = [0x13, sensor_id, value_hi, value_lo]
+    0x14  Flow                  content = [0x14, sensor_id, value_hi, value_lo]
 
-Sensor values are 16-bit unsigned integers in network byte order (big-endian).
+Sensor messages (0x1X) carry a 16-bit unsigned value in network byte order (big-endian).
 Scale factors: temperature ×0.01 °C, voltage ×0.01 V, current ×0.01 A, flow ×0.01 L/min,
                RPM is an integer (scale ×1).
+
+State transition messages (0x02):
+    reason byte — why the system changed state:
+        0x00  Bootup          → stop
+        0x01  E-stop          → stop
+        0x02  Software stop   → stop
+        0x03  Critical sensor → stop
+        0x04  Comm fail       → stop
+        0x05  Ready           → ready
+        0x06  Running         → running
+    tag byte — 0x00 initial message, 0x01 acknowledgement
 """
 
 HEADER = bytes([0xAA, 0xDD])
 
-MSG_PING        = 0x01
-MSG_TEMPERATURE = 0x10
-MSG_RPM         = 0x11
-MSG_VOLTAGE     = 0x12
-MSG_CURRENT     = 0x13
-MSG_FLOW        = 0x14
+MSG_PING             = 0x01
+MSG_STATE_TRANSITION = 0x02
+MSG_TEMPERATURE      = 0x10
+MSG_RPM              = 0x11
+MSG_VOLTAGE          = 0x12
+MSG_CURRENT          = 0x13
+MSG_FLOW             = 0x14
+
+# State transition reason codes
+STATE_BOOTUP          = 0x00
+STATE_ESTOP           = 0x01
+STATE_SOFTWARE_STOP   = 0x02
+STATE_CRITICAL_SENSOR = 0x03
+STATE_COMM_FAIL       = 0x04
+STATE_READY           = 0x05
+STATE_RUNNING         = 0x06
 
 _TYPE_NAMES: dict[int, str] = {
     MSG_PING:        "ping",
@@ -57,11 +79,33 @@ _UNIT: dict[int, str] = {
     MSG_FLOW:        "L/min",
 }
 
-# Reverse lookup: sensor type name → message type byte
+# Reverse lookup: sensor type name → message type byte (excludes non-sensor types)
 _NAME_TO_TYPE: dict[str, int] = {
     name: type_id
     for type_id, name in _TYPE_NAMES.items()
-    if type_id != MSG_PING
+    if type_id not in (MSG_PING, MSG_STATE_TRANSITION)
+}
+
+# State transition reason code → human-readable name
+_STATE_NAMES: dict[int, str] = {
+    STATE_BOOTUP:          "bootup",
+    STATE_ESTOP:           "e-stop",
+    STATE_SOFTWARE_STOP:   "software stop",
+    STATE_CRITICAL_SENSOR: "critical sensor",
+    STATE_COMM_FAIL:       "comm fail",
+    STATE_READY:           "ready",
+    STATE_RUNNING:         "running",
+}
+
+# State transition reason code → resulting system state
+_STATE_RESULT: dict[int, str] = {
+    STATE_BOOTUP:          "stop",
+    STATE_ESTOP:           "stop",
+    STATE_SOFTWARE_STOP:   "stop",
+    STATE_CRITICAL_SENSOR: "stop",
+    STATE_COMM_FAIL:       "stop",
+    STATE_READY:           "ready",
+    STATE_RUNNING:         "running",
 }
 
 
@@ -119,74 +163,118 @@ def decode(hex_string: str) -> tuple[str, int, float]:
         (sensor_type, sensor_number, value) — same types accepted by encode().
 
     Raises:
-        ProtocolError: for any of the following problems:
-            - non-hex characters in the string
-            - message too short to contain a valid frame
-            - header bytes are not AA DD
-            - actual byte count doesn't match the length field
-            - checksum does not match
-            - message type is not a sensor type (e.g. ping)
-            - content length is not 4 bytes (malformed sensor payload)
+        ProtocolError: for any structural problem, wrong message type, or bad checksum.
+                       Use decode_state_transition() for state transition messages.
     """
-    # --- 1. Parse hex ----------------------------------------------------------
-    clean = hex_string.strip().replace(" ", "").replace(",", "")
-    if not clean:
-        raise ProtocolError("Empty message.")
-    try:
-        data = bytes.fromhex(clean)
-    except ValueError as exc:
-        raise ProtocolError(f"Invalid hex string: {exc}") from exc
-
-    # --- 2. Minimum length: AA DD + length + 1 content byte + checksum = 5 ----
-    if len(data) < 5:
-        raise ProtocolError(
-            f"Message too short: {len(data)} byte(s), minimum is 5."
-        )
-
-    # --- 3. Header -------------------------------------------------------------
-    if data[0] != 0xAA or data[1] != 0xDD:
-        raise ProtocolError(
-            f"Invalid header: expected AA DD, got {data[0]:02X} {data[1]:02X}."
-        )
-
-    # --- 4. Length field -------------------------------------------------------
-    content_len = data[2]
-    expected_total = 2 + 1 + content_len + 1
-    if len(data) != expected_total:
-        raise ProtocolError(
-            f"Length mismatch: length field says {content_len} content byte(s) "
-            f"({expected_total} bytes total), but received {len(data)} bytes."
-        )
-
-    # --- 5. Checksum -----------------------------------------------------------
-    content = data[3: 3 + content_len]
-    received_cs = data[3 + content_len]
-    computed_cs = _checksum(content)
-    if computed_cs != received_cs:
-        raise ProtocolError(
-            f"Checksum mismatch: computed 0x{computed_cs:02X}, "
-            f"received 0x{received_cs:02X}."
-        )
-
-    # --- 6. Message type -------------------------------------------------------
+    content = _parse_frame(hex_string)
     msg_type = content[0]
     if msg_type == MSG_PING:
         raise ProtocolError("Ping message does not carry sensor_type/sensor_number/value.")
+    if msg_type == MSG_STATE_TRANSITION:
+        raise ProtocolError("Use decode_state_transition() for state transition messages.")
     if msg_type not in _SCALE:
         raise ProtocolError(f"Unknown message type: 0x{msg_type:02X}.")
-
-    # --- 7. Sensor payload -----------------------------------------------------
-    if content_len != 4:
-        raise ProtocolError(
-            f"Sensor payload must be 4 bytes, got {content_len}."
-        )
-
+    if len(content) != 4:
+        raise ProtocolError(f"Sensor payload must be 4 bytes, got {len(content)}.")
     sensor_number = content[1]
     raw_value = (content[2] << 8) | content[3]
     physical_value = raw_value * _SCALE[msg_type]
-    sensor_type = _TYPE_NAMES[msg_type]
+    return (_TYPE_NAMES[msg_type], sensor_number, physical_value)
 
-    return (sensor_type, sensor_number, physical_value)
+
+# ---------------------------------------------------------------------------
+# State transition encode  (one function per reason; is_ack selects tag byte)
+# ---------------------------------------------------------------------------
+
+def _encode_state(reason: int, is_ack: bool) -> bytes:
+    """Internal helper: build a state transition frame."""
+    tag = 0x01 if is_ack else 0x00
+    content = bytes([MSG_STATE_TRANSITION, reason, tag])
+    return build_message(content)
+
+
+def encode_bootup(is_ack: bool = False) -> bytes:
+    """State transition: system booted → stop state.
+
+    Args:
+        is_ack: False = initial message (tag 0x00), True = acknowledgement (tag 0x01).
+    """
+    return _encode_state(STATE_BOOTUP, is_ack)
+
+
+def encode_estop(is_ack: bool = False) -> bytes:
+    """State transition: e-stop triggered → stop state."""
+    return _encode_state(STATE_ESTOP, is_ack)
+
+
+def encode_software_stop(is_ack: bool = False) -> bytes:
+    """State transition: software stop commanded → stop state."""
+    return _encode_state(STATE_SOFTWARE_STOP, is_ack)
+
+
+def encode_critical_sensor(is_ack: bool = False) -> bytes:
+    """State transition: critical sensor out of range → stop state."""
+    return _encode_state(STATE_CRITICAL_SENSOR, is_ack)
+
+
+def encode_comm_fail(is_ack: bool = False) -> bytes:
+    """State transition: communication failure detected → stop state."""
+    return _encode_state(STATE_COMM_FAIL, is_ack)
+
+
+def encode_ready(is_ack: bool = False) -> bytes:
+    """State transition: system is ready → ready state."""
+    return _encode_state(STATE_READY, is_ack)
+
+
+def encode_running(is_ack: bool = False) -> bytes:
+    """State transition: system started → running state."""
+    return _encode_state(STATE_RUNNING, is_ack)
+
+
+# ---------------------------------------------------------------------------
+# State transition decode
+# ---------------------------------------------------------------------------
+
+def decode_state_transition(hex_string: str) -> tuple[str, str, bool]:
+    """Decode a hex string of a complete framed state transition message.
+
+    Args:
+        hex_string: full protocol frame as hex characters, spaces optional.
+
+    Returns:
+        (reason, end_state, is_ack)
+            reason:    human-readable reason string, e.g. "e-stop", "bootup"
+            end_state: resulting system state — "stop", "ready", or "running"
+            is_ack:    True if this is an acknowledgement, False if initial message
+
+    Raises:
+        ProtocolError: for any structural problem, wrong message type, or bad checksum.
+
+    Examples:
+        >>> decode_state_transition(encode_estop().hex())
+        ('e-stop', 'stop', False)
+        >>> decode_state_transition(encode_ready(is_ack=True).hex())
+        ('ready', 'ready', True)
+    """
+    content = _parse_frame(hex_string)
+    if content[0] != MSG_STATE_TRANSITION:
+        raise ProtocolError(
+            f"Expected state transition (0x02), got message type 0x{content[0]:02X}."
+        )
+    if len(content) != 3:
+        raise ProtocolError(
+            f"State transition payload must be 3 bytes, got {len(content)}."
+        )
+    reason = content[1]
+    tag    = content[2]
+    if reason not in _STATE_NAMES:
+        raise ProtocolError(f"Unknown state transition reason: 0x{reason:02X}.")
+    if tag not in (0x00, 0x01):
+        raise ProtocolError(
+            f"Invalid tag 0x{tag:02X}: expected 0x00 (initial) or 0x01 (ack)."
+        )
+    return (_STATE_NAMES[reason], _STATE_RESULT[reason], tag == 0x01)
 
 
 # ---------------------------------------------------------------------------
@@ -200,6 +288,58 @@ def _checksum(content: bytes) -> int:
 
 def _clamp_u16(value: int) -> int:
     return max(0, min(65535, value))
+
+
+def _parse_frame(hex_string: str) -> bytes:
+    """Parse and validate a complete protocol frame, returning its content bytes.
+
+    Shared by decode() and decode_state_transition() to avoid duplicating the
+    structural checks (hex parsing, header, length field, checksum).
+
+    Raises:
+        ProtocolError: for any structural problem before reaching the content.
+    """
+    # 1. Hex string → bytes
+    clean = hex_string.strip().replace(" ", "").replace(",", "")
+    if not clean:
+        raise ProtocolError("Empty message.")
+    try:
+        data = bytes.fromhex(clean)
+    except ValueError as exc:
+        raise ProtocolError(f"Invalid hex string: {exc}") from exc
+
+    # 2. Minimum size: header(2) + length(1) + 1 content byte + checksum(1) = 5
+    if len(data) < 5:
+        raise ProtocolError(
+            f"Message too short: {len(data)} byte(s), minimum is 5."
+        )
+
+    # 3. Header
+    if data[0] != 0xAA or data[1] != 0xDD:
+        raise ProtocolError(
+            f"Invalid header: expected AA DD, got {data[0]:02X} {data[1]:02X}."
+        )
+
+    # 4. Length field
+    content_len = data[2]
+    expected_total = 2 + 1 + content_len + 1
+    if len(data) != expected_total:
+        raise ProtocolError(
+            f"Length mismatch: length field says {content_len} content byte(s) "
+            f"({expected_total} bytes total), but received {len(data)} bytes."
+        )
+
+    # 5. Checksum
+    content = data[3: 3 + content_len]
+    received_cs = data[3 + content_len]
+    computed_cs = _checksum(content)
+    if computed_cs != received_cs:
+        raise ProtocolError(
+            f"Checksum mismatch: computed 0x{computed_cs:02X}, "
+            f"received 0x{received_cs:02X}."
+        )
+
+    return content
 
 
 def build_message(content: bytes) -> bytes:
@@ -262,15 +402,24 @@ def _decode_content(content: bytes) -> dict:
     msg_type = content[0]
     if msg_type == MSG_PING:
         return {"type": "ping"}
+    if msg_type == MSG_STATE_TRANSITION and len(content) == 3:
+        reason = content[1]
+        tag    = content[2]
+        return {
+            "type":      "state_transition",
+            "reason":    _STATE_NAMES.get(reason, f"0x{reason:02X}"),
+            "end_state": _STATE_RESULT.get(reason, "unknown"),
+            "is_ack":    tag == 0x01,
+        }
     if msg_type in _SCALE and len(content) == 4:
         sensor_id = content[1]
         raw_value = (content[2] << 8) | content[3]
         value = raw_value * _SCALE[msg_type]
         return {
-            "type": _TYPE_NAMES[msg_type],
+            "type":      _TYPE_NAMES[msg_type],
             "sensor_id": sensor_id,
-            "value": value,
-            "unit": _UNIT[msg_type],
+            "value":     value,
+            "unit":      _UNIT[msg_type],
         }
     return {"type": "unknown", "raw": content.hex(" ")}
 
@@ -280,11 +429,16 @@ def describe(msg: dict) -> str:
     t = msg.get("type", "unknown")
     if t == "ping":
         return "Ping"
+    if t == "state_transition":
+        reason    = msg.get("reason", "unknown")
+        end_state = msg.get("end_state", "unknown")
+        tag       = "ack" if msg.get("is_ack") else "initial"
+        return f"State → {end_state}  reason: {reason}  [{tag}]"
     if "sensor_id" in msg:
         unit = msg.get("unit", "")
-        val = msg.get("value", 0.0)
-        sid = msg.get("sensor_id", 0)
-        fmt = ".0f" if unit == "rpm" else ".2f"
+        val  = msg.get("value", 0.0)
+        sid  = msg.get("sensor_id", 0)
+        fmt  = ".0f" if unit == "rpm" else ".2f"
         return f"{t.capitalize()} sensor {sid}: {val:{fmt}} {unit}"
     return f"Unknown: {msg.get('raw', '')}"
 
