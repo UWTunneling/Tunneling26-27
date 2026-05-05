@@ -18,6 +18,23 @@ DEFAULT_PORT = 8080
 DEFAULT_POLL_HZ = 3.0
 RECV_TIMEOUT = 0.1
 
+# Operational thresholds enforced by the microcontroller. A reading outside
+# its (lo, hi) band is considered an out-of-range fault — independent of the
+# simulator's own SensorConfig.min_val/max_val (which describe the nominal
+# range used for value generation, not fault detection).
+THRESHOLDS: dict[str, tuple[float, float]] = {
+    "temp_1":    (0.0,   120.0),
+    "temp_2":    (0.0,   120.0),
+    "temp_3":    (0.0,   120.0),
+    "rpm":       (0.0,  6000.0),
+    "voltage_1": (450.0, 510.0),
+    "voltage_2": (110.0, 130.0),
+    "voltage_3": (4.7,   5.3),
+    "current_1": (0.0,   50.0),
+    "current_2": (0.0,   50.0),
+    "flow_1":    (0.0,  100.0),
+}
+
 
 class MockMicrocontroller:
     """Owns a SensorSimulator and polls it on a daemon thread at poll_hz."""
@@ -51,6 +68,19 @@ class MockMicrocontroller:
     def get_readings(self) -> dict[str, float]:
         with self._lock:
             return dict(self._readings)
+
+    def is_in_range(self, sensor_id: str) -> bool:
+        """Return True if the latest reading for *sensor_id* is within THRESHOLDS."""
+        lo, hi = THRESHOLDS[sensor_id]
+        with self._lock:
+            val = self._readings[sensor_id]
+        return lo <= val <= hi
+
+    def out_of_range_sensors(self) -> list[str]:
+        """Return sensor IDs whose latest readings are outside THRESHOLDS."""
+        with self._lock:
+            snap = dict(self._readings)
+        return [sid for sid in SENSOR_IDS if not THRESHOLDS[sid][0] <= snap[sid] <= THRESHOLDS[sid][1]]
 
     def _run(self) -> None:
         period = 1.0 / self._poll_hz

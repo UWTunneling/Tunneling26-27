@@ -109,22 +109,6 @@ SENSOR_IDS: tuple[str, ...] = (
     "flow_1",
 )
 
-# Hardcode thresholds. 
-# Otherwise, thresholds for error are directly from SensorConfig min/max values
-THRESHOLDS: dict[str, tuple[float, float]] = {
-        "temp_1":    (0.0,   120.0),
-        "temp_2":    (0.0,   120.0),
-        "temp_3":    (0.0,   120.0),
-        "rpm":       (0.0,  6000.0),
-        "voltage_1": (450.0, 510.0),
-        "voltage_2": (110.0, 130.0),
-        "voltage_3": (4.7,   5.3),
-        "current_1": (0.0,   50.0),
-        "current_2": (0.0,   50.0),
-        "flow_1":    (0.0,  100.0),
-        }
-
-
 # Simulator
 class SensorSimulator:
     """
@@ -300,16 +284,11 @@ class SensorSimulator:
         self._tick_count = 0
 
     # Nominal range checks
-    # def is_in_range(self, sensor_id: str) -> bool:
-    #     """Return True if the sensor's current value is within [min_val, max_val]."""
-    #     cfg = self._configs[sensor_id]
-    #     return cfg.min_val <= self._values[sensor_id] <= cfg.max_val
-    
-    #Threshold check
+
     def is_in_range(self, sensor_id: str) -> bool:
-        """Return True if the sensor's current value is within the hardcoded THRESHOLDS."""
-        lo, hi = THRESHOLDS[sensor_id]
-        return lo <= self._values[sensor_id] <= hi
+        """Return True if the sensor's current value is within [min_val, max_val]."""
+        cfg = self._configs[sensor_id]
+        return cfg.min_val <= self._values[sensor_id] <= cfg.max_val
 
     def out_of_range_sensors(self) -> list[str]:
         """Return sensor IDs whose current values are outside their nominal range."""

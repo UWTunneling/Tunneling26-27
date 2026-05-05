@@ -16,8 +16,8 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import protocol
 
-from sensor_simulator import SENSOR_IDS, SensorSimulator, THRESHOLDS
-from mock_microcontroller import MockMicrocontroller
+from sensor_simulator import SENSOR_IDS, SensorSimulator
+from mock_microcontroller import MockMicrocontroller, THRESHOLDS
 
 # Display label and unit for each sensor (for GUI)
 SENSOR_LABELS: dict[str, tuple[str, str]] = {
@@ -236,28 +236,23 @@ class MockApp:
 
         # Threshold alerts (logs on error and recovery)
         for sid in SENSOR_IDS:
-            cfg = self.mcu._sim.config(sid)
             val = snap.get(sid, 0.0)
-            lo, hi = THRESHOLDS[sid]
-            out = not (lo <= val <= hi)
-            # Fixed thresholds 
-            #out = not (cfg.min_val <= val <= cfg.max_val)
+            out = not self.mcu.is_in_range(sid)
             was_faulted = self._sensor_faulted[sid]
 
             if out and not was_faulted:
                 label, unit = SENSOR_LABELS.get(sid, (sid, ""))
                 unit_str = f" {unit}" if unit else ""
+                lo, hi = THRESHOLDS[sid]
                 self.log(
                     f"THRESHOLD EXCEEDED — {label}: "
                     f"{val:.3g}{unit_str} "
                     f"(nominal {lo:.3g}–{hi:.3g}{unit_str})"
-                    # Fixed thresholds 
-                    # f"(nominal {cfg.min_val:.3g}–{cfg.max_val:.3g}{unit_str})"
                 )
                 self._sensor_faulted[sid] = True
 
             elif not out and was_faulted:
-                label, unit = SENSOR_LABELS.get(sid, (sid, ""))
+                label, _ = SENSOR_LABELS.get(sid, (sid, ""))
                 self.log(f"RECOVERED — {label}: back in range ({val:.3g})")
                 self._sensor_faulted[sid] = False
 
