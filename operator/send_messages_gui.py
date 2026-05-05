@@ -234,6 +234,7 @@ class OperatorApp:
             if age > 5.0 and self._connection_healthy:
                 self._connection_healthy = False
                 self.log(f"No data from server for {age:.0f} s — connection may be lost.")
+                self.on_disconnect
             elif age <= 5.0 and not self._connection_healthy:
                 self._connection_healthy = True
                 self.log("Connection health restored.")
@@ -249,6 +250,7 @@ class OperatorApp:
             age = time.time() - self._last_pong_time
             if age > 3.0 and self._heartbeat_healthy:
                 self._heartbeat_healthy = False
+                self.heartbeat = False
                 self.log(f"HEARTBEAT FAULT: no pong for {age:.1f} s.")
             elif age <= 3.0 and not self._heartbeat_healthy:
                 self._heartbeat_healthy = True
