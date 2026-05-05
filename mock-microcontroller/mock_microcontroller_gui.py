@@ -31,6 +31,7 @@ SENSOR_LABELS: dict[str, tuple[str, str]] = {
     "current_1": ("Current 1", "A"),
     "current_2": ("Current 2", "A"),
     "flow_1": ("Flow 1", "L/min"),
+    "state": ("State", "state"),
 }
 
 
@@ -156,6 +157,10 @@ class MockApp:
         self._last_ping_time: float | None = None
         self._heartbeat_healthy: bool = True
         self._heartbeat_check_id: str | None = None
+        #State 0 = Stop, 1 = Ready, 2 = Running
+        self.hardware = False
+        self.state = 0
+        self.estop_hold_job = None
 
         # Server
         srv = ttk.LabelFrame(self.root, text="Server", padding=6)
@@ -170,14 +175,22 @@ class MockApp:
         self.port_var = tk.IntVar(value=8080)
         self.port_spin = ttk.Spinbox(row, from_=1, to=65535, width=6, textvariable=self.port_var)
         self.port_spin.pack(side=tk.LEFT, padx=(0, 12))
-        self.start_btn = ttk.Button(row, text="Start", command=self.on_start)
+        self.start_btn = ttk.Button(row, text="Start", width=6, command=self.on_start)
         self.start_btn.pack(side=tk.LEFT, padx=(0, 6))
-        self.stop_btn = ttk.Button(row, text="Stop", command=self.on_stop, state=tk.DISABLED)
-        self.stop_btn.pack(side=tk.LEFT)
+        #self.start_btn.bind("<ButtonPress-1>", self.estop_press)
+        #self.start_btn.bind("<ButtonRelease-1>", self.estop_release)
+        self.stop_btn = ttk.Button(row, text="Stop", width = 6, command=self.on_stop, state=tk.DISABLED)
+        self.stop_btn.pack(side=tk.LEFT, padx=(0, 6))
 
         # Ack toggle — label reflects current state.
-        self.toggle_btn = ttk.Button(row, text="Ack On", command=self.toggle_ack)
+        self.toggle_btn = ttk.Button(row, text="Ack On", width=6, command=self.toggle_ack)
         self.toggle_btn.pack(side=tk.LEFT, padx=(0, 6))
+
+        #Estop
+        self.state_btn = ttk.Button(row, text="E-Stop", width= 6)
+        self.state_btn.pack(side=tk.LEFT, padx=(0, 6))
+        self.state_btn.bind("<ButtonPress-1>", self.estop_press)
+        self.state_btn.bind("<ButtonRelease-1>", self.estop_release)
 
         # Sensors (random state simulator) — 3 columns to use horizontal space
         sens_f = ttk.LabelFrame(self.root, text="Sensors", padding=6)
@@ -270,6 +283,7 @@ class MockApp:
                 protocol.encode_current(1, snap["current_1"]),
                 protocol.encode_current(2, snap["current_2"]),
                 protocol.encode_flow(1, snap["flow_1"]),
+                #protocol.encode_state(1, self.state),
             ])
             self._send_bytes(payload)
 
@@ -305,7 +319,9 @@ class MockApp:
         """
         if self.conn and self._last_ping_time is not None:
             age = time.time() - self._last_ping_time
-            if age > 3.0 and self._heartbeat_healthy:
+            if age > 3.0 and self.state == 0:
+                self.log(f"In Stop State")
+            elif age > 3.0 and self._heartbeat_healthy:
                 self._heartbeat_healthy = False
                 self.log(f"HEARTBEAT FAULT: no ping from operator for {age:.1f} s.")
             elif age <= 3.0 and not self._heartbeat_healthy:
@@ -332,12 +348,19 @@ class MockApp:
 
     def on_start(self):
         host = self.host_var.get().strip() or "0.0.0.0"
+        self.hardware = True
         try:
             port = int(self.port_var.get())
         except tk.TclError:
             port = 8080
 
         def on_connected(conn):
+            #if self.state == 0:
+            #    try:
+            #        conn.close()
+            #    except:
+            #        pass
+            #    return False
             self.conn = conn
             self._stream_parser.reset()
             self._last_rx_time = None
@@ -361,7 +384,9 @@ class MockApp:
                     desc = protocol.describe(msg)
                     if msg.get("type") == "ping":
                         self._last_ping_time = time.time()
-                        if self.respondAck:
+                        if self.state == 0:
+                            self.on_stop
+                        elif self.respondAck:
                             self._send_bytes(protocol.build_ping())
                             self.log(f"  → {desc}  (pong sent)")
                         else:
@@ -387,13 +412,17 @@ class MockApp:
             host, port, on_connected, on_received, on_client_disconnected, on_stopped
         )
         self.server_thread.start()
-        self._check_connection_health()
-        self._check_heartbeat_health()
         self.start_btn.configure(state=tk.DISABLED)
         self.stop_btn.configure(state=tk.NORMAL)
         self.host_edit.configure(state=tk.DISABLED)
         self.port_spin.configure(state=tk.DISABLED)
         self.log(f"Listening on {host}:{port}.")
+        
+        if self.state == 0:
+            on_client_disconnected
+        else: 
+            self._check_connection_health()
+            self._check_heartbeat_health()
 
     def _on_stopped(self):
         self.conn = None
@@ -403,6 +432,7 @@ class MockApp:
         self.host_edit.configure(state=tk.NORMAL)
         self.port_spin.configure(state=tk.NORMAL)
         self.server_thread = None
+        self.toggle_state(0)
         self.log("Server stopped.")
 
     def on_stop(self):
@@ -415,6 +445,7 @@ class MockApp:
         self.stop_btn.configure(state=tk.DISABLED)
         self.host_edit.configure(state=tk.NORMAL)
         self.port_spin.configure(state=tk.NORMAL)
+        self.toggle_state(0)
         self.log("Server stopped.")
 
     def send_hex(self):
@@ -443,6 +474,13 @@ class MockApp:
         if self._heartbeat_check_id is not None:
             self.root.after_cancel(self._heartbeat_check_id)
             self._heartbeat_check_id = None
+        if self._conn:
+            try:
+                self._conn.close()
+            except:
+                pass
+        self._conn = None
+
         self.on_stop()
         self.root.destroy()
 
@@ -456,6 +494,51 @@ class MockApp:
             self.toggle_btn.config(text="Ack On")
         else:
             self.toggle_btn.config(text="Ack Off")
+
+
+    def estop_press(self, event):
+        # Start a 3-second timer
+        if self.state == 0:
+            self.estop_hold_job = self.root.after(3000, self.estop_trigger)
+        else:
+            self.toggle_state(0)
+            self.hardware = False
+        
+
+
+    def estop_release(self, event):
+        # If released early, cancel the timer
+        if self.estop_hold_job is not None:
+            self.root.after_cancel(self.estop_hold_job)
+            self.estop_hold_job = None
+
+    def estop_trigger(self):
+        # Only fires if held for full 3 seconds
+        if self.hardware:
+            self.toggle_state(1)
+        self.estop_hold_job = None
+
+    def toggle_hardware(self):
+        self.hardware = not self.hardware
+    
+    def toggle_state(self, newState):
+        old = self.state
+        self.state = newState
+        self.log(f"State Change: {old} → {newState}")
+        if newState == 0:
+            if self.server_thread:
+                self.server_thread.stop()
+                self.server_thread = None
+            self.conn = None
+            self.send_btn.configure(state=tk.DISABLED)
+            self.start_btn.configure(state=tk.NORMAL)
+            self.stop_btn.configure(state=tk.DISABLED)
+            self.host_edit.configure(state=tk.NORMAL)
+            self.port_spin.configure(state=tk.NORMAL)
+        elif newState == 1:
+            self.on_start
+        
+
 
 def main():
     app = MockApp()
