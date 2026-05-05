@@ -16,7 +16,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import protocol
 
-from sensor_simulator import SENSOR_IDS, SensorSimulator
+from sensor_simulator import SENSOR_IDS, SensorSimulator, THRESHOLDS
 from mock_microcontroller import MockMicrocontroller
 
 # Display label and unit for each sensor (for GUI)
@@ -148,6 +148,9 @@ class MockApp:
         self._connection_healthy: bool = True
         self.respondAck = True
         self.ack_count = 0
+
+        # Track which sensors are faulted to log transitions
+        self._sensor_faulted: dict[str, bool] = {sid: False for sid in SENSOR_IDS}
         # Ping-tracking — independent of the 2 Hz sensor-receive path; used
         # to detect the operator going silent for 3 heartbeat cycles.
         self._last_ping_time: float | None = None
@@ -230,6 +233,34 @@ class MockApp:
             else:
                 text = f"{val:.2f}"
             self.sensor_vars[sid].set(text)
+
+        # Threshold alerts (logs on error and recovery)
+        for sid in SENSOR_IDS:
+            cfg = self.mcu._sim.config(sid)
+            val = snap.get(sid, 0.0)
+            lo, hi = THRESHOLDS[sid]
+            out = not (lo <= val <= hi)
+            # Fixed thresholds 
+            #out = not (cfg.min_val <= val <= cfg.max_val)
+            was_faulted = self._sensor_faulted[sid]
+
+            if out and not was_faulted:
+                label, unit = SENSOR_LABELS.get(sid, (sid, ""))
+                unit_str = f" {unit}" if unit else ""
+                self.log(
+                    f"THRESHOLD EXCEEDED — {label}: "
+                    f"{val:.3g}{unit_str} "
+                    f"(nominal {lo:.3g}–{hi:.3g}{unit_str})"
+                    # Fixed thresholds 
+                    # f"(nominal {cfg.min_val:.3g}–{cfg.max_val:.3g}{unit_str})"
+                )
+                self._sensor_faulted[sid] = True
+
+            elif not out and was_faulted:
+                label, unit = SENSOR_LABELS.get(sid, (sid, ""))
+                self.log(f"RECOVERED — {label}: back in range ({val:.3g})")
+                self._sensor_faulted[sid] = False
+
 
         # Send all sensor readings to the connected operator.
         if self.conn:
