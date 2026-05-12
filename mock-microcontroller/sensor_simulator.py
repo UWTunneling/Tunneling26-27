@@ -109,7 +109,6 @@ SENSOR_IDS: tuple[str, ...] = (
     "flow_1",
 )
 
-
 # Simulator
 class SensorSimulator:
     """
