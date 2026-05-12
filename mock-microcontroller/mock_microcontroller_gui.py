@@ -24,7 +24,24 @@ from mock_microcontroller import (
     STATE_READY,
     STATE_RUNNING,
     STATE_NAMES,
+    REASON_BOOTUP,
+    REASON_ESTOP,
+    REASON_SOFTWARE_STOP,
+    REASON_CRITICAL_SENSOR,
+    REASON_COMM_FAIL,
+    REASON_READY,
+    REASON_RUNNING,
 )
+
+# Map (state, reason) → protocol encoder for outbound state_transition frames.
+# READY and RUNNING are reason-agnostic; STOP carries the reason that caused it.
+_STOP_ENCODERS = {
+    REASON_BOOTUP:          protocol.encode_bootup,
+    REASON_ESTOP:           protocol.encode_estop,
+    REASON_SOFTWARE_STOP:   protocol.encode_software_stop,
+    REASON_CRITICAL_SENSOR: protocol.encode_critical_sensor,
+    REASON_COMM_FAIL:       protocol.encode_comm_fail,
+}
 
 # Display label and unit for each sensor (for GUI)
 SENSOR_LABELS: dict[str, tuple[str, str]] = {
@@ -55,13 +72,17 @@ def parse_hex(line: str) -> bytes | None:
 
 class ServerThread:
     def __init__(self, host: str, port: int, on_connected, on_received,
-                 on_client_disconnected, on_stopped):
+                 on_client_disconnected, on_stopped, on_listening=None):
         self.host = host
         self.port = port
         self.on_connected = on_connected
         self.on_received = on_received
         self.on_client_disconnected = on_client_disconnected
         self.on_stopped = on_stopped
+        # on_listening(host, port) fires once the server is actually bound and
+        # accepting. on_stopped(err: str | None) carries the bind error when
+        # startup failed, None on a clean stop.
+        self.on_listening = on_listening
         self._running = True
         self._conn = None
         self._server = None
@@ -95,9 +116,11 @@ class ServerThread:
             self._server.bind((self.host, self.port))
             self._server.listen(1)
             self._server.settimeout(0.5)
-        except Exception:
-            self.on_stopped()
+        except Exception as e:
+            self.on_stopped(f"Bind failed: {e}")
             return
+        if self.on_listening:
+            self.on_listening(self.host, self.port)
         while self._running:
             try:
                 conn, addr = self._server.accept()
@@ -136,7 +159,7 @@ class ServerThread:
         except Exception:
             pass
         self._server = None
-        self.on_stopped()
+        self.on_stopped(None)
 
 
 class MockApp:
@@ -205,7 +228,11 @@ class MockApp:
         ttk.Label(sys_row, text="E-Stop:").pack(side=tk.LEFT)
         self.estop_var = tk.StringVar(value="LATCHED" if self.mcu.is_estop_latched() else "UNLATCHED")
         ttk.Label(sys_row, textvariable=self.estop_var, width=12, font=bold).pack(side=tk.LEFT, padx=(4, 16))
-        hw_start_state = tk.NORMAL if self.mcu.get_state() == STATE_READY else tk.DISABLED
+        hw_start_state = (
+            tk.NORMAL
+            if self.mcu.get_state() == STATE_STOP and not self.mcu.is_estop_latched()
+            else tk.DISABLED
+        )
         self.hw_start_btn = ttk.Button(
             sys_row, text="Hardware Start", command=self.on_hardware_start, state=hw_start_state
         )
@@ -271,10 +298,15 @@ class MockApp:
                 text = f"{val:.2f}"
             self.sensor_vars[sid].set(text)
 
-        # Threshold alerts (logs on error and recovery)
+        # Threshold alerts (logs on error and recovery). When the machine is
+        # armed (READY/RUNNING) and any sensor goes out of range, drive STOP
+        # with reason=critical_sensor.
+        any_out_of_range = False
         for sid in SENSOR_IDS:
             val = snap.get(sid, 0.0)
             out = not self.mcu.is_in_range(sid)
+            if out:
+                any_out_of_range = True
             was_faulted = self._sensor_faulted[sid]
 
             if out and not was_faulted:
@@ -292,6 +324,9 @@ class MockApp:
                 label, _ = SENSOR_LABELS.get(sid, (sid, ""))
                 self.log(f"RECOVERED — {label}: back in range ({val:.3g})")
                 self._sensor_faulted[sid] = False
+
+        if any_out_of_range and self.mcu.get_state() in (STATE_READY, STATE_RUNNING):
+            self.mcu.critical_sensor_fault()
 
 
         # Send all sensor readings to the connected operator.
@@ -313,7 +348,7 @@ class MockApp:
         self._sensor_tick_id = self.root.after(500, self._tick_sensors)
 
     def _send_bytes(self, data: bytes) -> None:
-        """Send raw bytes to the connected client (must be called from the main thread)."""
+        """Send raw bytes to the connected client (main thread only)."""
         if not self.conn:
             return
         try:
@@ -339,12 +374,16 @@ class MockApp:
         """Fault once when no ping has arrived for >3 s (3 heartbeat cycles).
 
         Heartbeat cycle is 1 Hz on the operator side, so 3 cycles = 3 s.
+        If the machine is armed (READY/RUNNING), a heartbeat fault drives
+        the MCU to STOP with reason=comm_fail.
         """
         if self.conn and self._last_ping_time is not None:
             age = time.time() - self._last_ping_time
             if age > 3.0 and self._heartbeat_healthy:
                 self._heartbeat_healthy = False
                 self.log(f"HEARTBEAT FAULT: no ping from operator for {age:.1f} s.")
+                if self.mcu.get_state() in (STATE_READY, STATE_RUNNING):
+                    self.mcu.comm_fail()
             elif age <= 3.0 and not self._heartbeat_healthy:
                 self._heartbeat_healthy = True
                 self.log("Heartbeat recovered.")
@@ -383,8 +422,18 @@ class MockApp:
             # whatever stale time the previous client left behind.
             self._last_ping_time = time.time()
             self._heartbeat_healthy = True
-            self.root.after(0, lambda: self.send_btn.configure(state=tk.NORMAL))
-            self.root.after(0, lambda: self.log("Client connected."))
+            def on_main():
+                self.send_btn.configure(state=tk.NORMAL)
+                self.log("Client connected.")
+                # Announce current MCU state to the freshly-connected operator.
+                # Does NOT call bootup() — that would reset the latch on every
+                # reconnect, clearing a real physical E-stop event.
+                frame = self._encode_state_frame(
+                    self.mcu.get_state(), self.mcu.get_reason(), is_ack=False
+                )
+                if frame is not None:
+                    self._send_bytes(frame)
+            self.root.after(0, on_main)
 
         def on_received(data: bytes):
             # Parse on the server thread; dispatch decoded results to main thread.
@@ -396,13 +445,17 @@ class MockApp:
                 self.log(f"Recv ({len(h.replace(' ', '')) // 2} B): {h}")
                 for msg in m:
                     desc = protocol.describe(msg)
-                    if msg.get("type") == "ping":
+                    mtype = msg.get("type")
+                    if mtype == "ping":
                         self._last_ping_time = time.time()
                         if self.respondAck:
                             self._send_bytes(protocol.build_ping())
                             self.log(f"  → {desc}  (pong sent)")
                         else:
                             self.log(f"  → {desc}  (ack off, no pong)")
+                    elif mtype == "state_transition":
+                        self._handle_operator_command(msg)
+                        self.log(f"  → {desc}")
                     else:
                         self.log(f"  → {desc}")
             self.root.after(0, update)
@@ -414,14 +467,21 @@ class MockApp:
                 self._heartbeat_healthy = True
                 self.send_btn.configure(state=tk.DISABLED)
                 self.log("Client disconnected.")
+                # If the operator drops while the machine is armed, fail-safe to STOP.
+                if self.mcu.get_state() in (STATE_READY, STATE_RUNNING):
+                    self.mcu.comm_fail()
             self.root.after(0, update)
 
-        def on_stopped():
+        def on_stopped(err: str | None = None):
             self.conn = None
-            self.root.after(0, self._on_stopped)
+            self.root.after(0, lambda: self._on_stopped(err))
+
+        def on_listening(h, p):
+            self.root.after(0, lambda: self.log(f"Listening on {h}:{p}."))
 
         self.server_thread = ServerThread(
-            host, port, on_connected, on_received, on_client_disconnected, on_stopped
+            host, port, on_connected, on_received, on_client_disconnected,
+            on_stopped, on_listening=on_listening,
         )
         self.server_thread.start()
         self._check_connection_health()
@@ -430,9 +490,8 @@ class MockApp:
         self.stop_btn.configure(state=tk.NORMAL)
         self.host_edit.configure(state=tk.DISABLED)
         self.port_spin.configure(state=tk.DISABLED)
-        self.log(f"Listening on {host}:{port}.")
 
-    def _on_stopped(self):
+    def _on_stopped(self, err: str | None = None):
         self.conn = None
         self.send_btn.configure(state=tk.DISABLED)
         self.start_btn.configure(state=tk.NORMAL)
@@ -440,7 +499,10 @@ class MockApp:
         self.host_edit.configure(state=tk.NORMAL)
         self.port_spin.configure(state=tk.NORMAL)
         self.server_thread = None
-        self.log("Server stopped.")
+        if err:
+            self.log(f"Server failed to start: {err}")
+        else:
+            self.log("Server stopped.")
 
     def on_stop(self):
         if self.server_thread:
@@ -504,24 +566,36 @@ class MockApp:
     # the 3-second E-Stop hold timer (a UI affordance) and reacts to state
     # changes via the listener below.
 
-    def _on_state_changed(self, new_state: int, latched: bool) -> None:
+    def _on_state_changed(self, new_state: int, latched: bool, reason: str, is_ack: bool) -> None:
         """Listener registered with the MCU. Updates UI and notifies the operator."""
         def update():
             self.state_var.set(STATE_NAMES[new_state])
             self.estop_var.set("LATCHED" if latched else "UNLATCHED")
             self.hw_start_btn.configure(
-                state=tk.NORMAL if new_state == STATE_READY else tk.DISABLED
+                state=tk.NORMAL if new_state == STATE_STOP and not latched else tk.DISABLED
             )
-            self.log(f"State: {STATE_NAMES[new_state]}  (E-Stop {'LATCHED' if latched else 'UNLATCHED'})")
+            ack_tag = " [ack]" if is_ack else ""
+            self.log(
+                f"State: {STATE_NAMES[new_state]} ({reason}){ack_tag}  "
+                f"E-Stop {'LATCHED' if latched else 'UNLATCHED'}"
+            )
             if self.conn:
-                if new_state == STATE_STOP:
-                    self._send_bytes(protocol.encode_estop())
-                elif new_state == STATE_READY:
-                    self._send_bytes(protocol.encode_ready())
-                elif new_state == STATE_RUNNING:
-                    self._send_bytes(protocol.encode_running())
+                frame = self._encode_state_frame(new_state, reason, is_ack)
+                if frame is not None:
+                    self._send_bytes(frame)
         # Listeners may be invoked from any thread; marshal onto the main thread.
         self.root.after(0, update)
+
+    def _encode_state_frame(self, state: int, reason: str, is_ack: bool) -> bytes | None:
+        """Pick the protocol encoder matching (state, reason). Returns None if no mapping."""
+        if state == STATE_READY:
+            return protocol.encode_ready(is_ack=is_ack)
+        if state == STATE_RUNNING:
+            return protocol.encode_running(is_ack=is_ack)
+        if state == STATE_STOP:
+            encoder = _STOP_ENCODERS.get(reason, protocol.encode_estop)
+            return encoder(is_ack=is_ack)
+        return None
 
     def estop_press(self, event):
         if self.mcu.is_estop_latched():
@@ -542,6 +616,29 @@ class MockApp:
 
     def on_hardware_start(self):
         self.mcu.hardware_start()
+
+    # ----- Inbound operator commands ---------------------------------------
+
+    def _handle_operator_command(self, msg: dict) -> None:
+        """Dispatch a decoded state_transition frame as an operator command.
+
+        Ignores ack frames (those are the MCU's own echoes coming back) and
+        only acts on the two commands the operator is allowed to issue.
+        """
+        if msg.get("is_ack"):
+            return
+        reason = msg.get("reason")
+        if reason == "running":
+            if not self.mcu.software_start():
+                self.log(f"  Rejected software_start: state={STATE_NAMES[self.mcu.get_state()]}")
+        elif reason == "software stop":
+            if not self.mcu.software_stop():
+                self.log(f"  Rejected software_stop: state={STATE_NAMES[self.mcu.get_state()]}")
+        elif reason == "comm fail":
+            if not self.mcu.comm_fail(is_ack=True):
+                self.log(f"  Rejected comm_fail: state={STATE_NAMES[self.mcu.get_state()]}")
+        else:
+            self.log(f"  Ignored operator state frame: reason={reason}")
 
 
 def main():

@@ -85,6 +85,11 @@ class OperatorApp:
         self.sensor_state: dict[str, float | None] = {sid: None for sid in SENSOR_IDS}
         self.sensor_vars: dict[str, tk.StringVar] = {}
 
+        # MCU state mirror — populated from inbound state_transition frames.
+        # "—" until the first frame (typically the MCU's bootup-on-connect).
+        self.current_mcu_state: str | None = None
+        self.current_reason: str | None = None
+
         # Connection
         conn = ttk.LabelFrame(self.root, text="Connection", padding=6)
         conn.pack(fill=tk.X, padx=6, pady=6)
@@ -102,6 +107,27 @@ class OperatorApp:
         self.connect_btn.pack(side=tk.LEFT, padx=(0, 6))
         self.disconnect_btn = ttk.Button(row, text="Disconnect", command=self.on_disconnect, state=tk.DISABLED)
         self.disconnect_btn.pack(side=tk.LEFT)
+
+        # State — labels + Software Start/Stop. Populated from inbound state_transition frames.
+        state_f = ttk.LabelFrame(self.root, text="State", padding=6)
+        state_f.pack(fill=tk.X, padx=6, pady=(0, 6))
+        state_row = tk.Frame(state_f)
+        state_row.pack(fill=tk.X)
+        bold = ("TkDefaultFont", 10, "bold")
+        ttk.Label(state_row, text="State:").pack(side=tk.LEFT)
+        self.state_var = tk.StringVar(value="—")
+        ttk.Label(state_row, textvariable=self.state_var, width=10, font=bold).pack(side=tk.LEFT, padx=(4, 16))
+        ttk.Label(state_row, text="Reason:").pack(side=tk.LEFT)
+        self.reason_var = tk.StringVar(value="—")
+        ttk.Label(state_row, textvariable=self.reason_var, width=18, font=bold).pack(side=tk.LEFT, padx=(4, 16))
+        self.sw_start_btn = ttk.Button(
+            state_row, text="Software Start", command=self.on_software_start, state=tk.DISABLED
+        )
+        self.sw_start_btn.pack(side=tk.LEFT, padx=(0, 6))
+        self.sw_stop_btn = ttk.Button(
+            state_row, text="Software Stop", command=self.on_software_stop, state=tk.DISABLED
+        )
+        self.sw_stop_btn.pack(side=tk.LEFT)
 
         # Sensors — values decoded from the microcontroller stream (3 columns).
         sens_f = ttk.LabelFrame(self.root, text="Sensors", padding=6)
@@ -169,9 +195,13 @@ class OperatorApp:
                 def update(h=hex_str, m=msgs):
                     self.log(f"Recv ({len(h.replace(' ', '')) // 2} B): {h}")
                     for msg in m:
-                        if msg.get("type") == "ping":
+                        mtype = msg.get("type")
+                        if mtype == "ping":
                             self._last_pong_time = time.time()
-                        self._apply_sensor_update(msg)
+                        elif mtype == "state_transition":
+                            self._apply_state_transition(msg)
+                        else:
+                            self._apply_sensor_update(msg)
                         self.log(f"  → {protocol.describe(msg)}")
                     self._refresh_sensor_display()
                 self.root.after(0, update)
@@ -183,9 +213,55 @@ class OperatorApp:
                 break
 
         # If recv_running is still True we didn't disconnect deliberately —
-        # the server dropped the connection.
+        # the server dropped the connection. Clean up the UI on the main thread.
         if self.recv_running:
-            self.root.after(0, lambda: self.log("Connection lost — server disconnected."))
+            def on_lost():
+                self.log("Connection lost — server disconnected.")
+                self.on_disconnect()
+            self.root.after(0, on_lost)
+
+    def _apply_state_transition(self, msg: dict) -> None:
+        """Update MCU state mirror + UI labels from a decoded state_transition frame."""
+        end_state = msg.get("end_state", "—")
+        reason = msg.get("reason", "—")
+        self.current_mcu_state = end_state
+        self.current_reason = reason
+        self.state_var.set(end_state.upper())
+        # Reason is most useful on STOP; for ready/running it's redundant with state.
+        self.reason_var.set(reason if end_state == "stop" else "—")
+        self._refresh_state_controls()
+
+    def _refresh_state_controls(self) -> None:
+        """Enable/disable Software Start and Software Stop by current MCU state."""
+        if not self.sock:
+            self.sw_start_btn.configure(state=tk.DISABLED)
+            self.sw_stop_btn.configure(state=tk.DISABLED)
+            return
+        st = self.current_mcu_state
+        self.sw_start_btn.configure(state=tk.NORMAL if st == "ready" else tk.DISABLED)
+        self.sw_stop_btn.configure(
+            state=tk.NORMAL if st in ("ready", "running") else tk.DISABLED
+        )
+
+    def on_software_start(self) -> None:
+        if not self.sock:
+            return
+        try:
+            self.sock.sendall(protocol.encode_running())
+            self.log("Sent: Software Start")
+        except Exception as e:
+            self.log(f"Send error: {e}")
+            self.on_disconnect()
+
+    def on_software_stop(self) -> None:
+        if not self.sock:
+            return
+        try:
+            self.sock.sendall(protocol.encode_software_stop())
+            self.log("Sent: Software Stop")
+        except Exception as e:
+            self.log(f"Send error: {e}")
+            self.on_disconnect()
 
     def _apply_sensor_update(self, msg: dict) -> None:
         """Save a decoded sensor message into self.sensor_state."""
@@ -243,18 +319,40 @@ class OperatorApp:
     def _check_heartbeat_health(self) -> None:
         """Fault once when no pong has arrived within 3 s of the last ping.
 
-        Runs while connected; paused while the operator-side heartbeat toggle
-        is off (no pings → no pongs expected).
+        On fault: operator concludes the MCU is unreachable, optimistically
+        forces its local state mirror to STOP (so the UI reflects the
+        operator's intent) and sends encode_software_stop() to the MCU. The
+        command may or may not arrive — best-effort.
         """
         if self.sock and self.heartbeat and self._last_pong_time is not None:
             age = time.time() - self._last_pong_time
             if age > 3.0 and self._heartbeat_healthy:
                 self._heartbeat_healthy = False
-                self.log(f"HEARTBEAT FAULT: no pong for {age:.1f} s.")
+                self.log(f"HEARTBEAT FAULT: no pong for {age:.1f} s — stopping.")
+                self._fault_stop("comm fail")
             elif age <= 3.0 and not self._heartbeat_healthy:
                 self._heartbeat_healthy = True
                 self.log("Heartbeat recovered.")
         self._heartbeat_check_id = self.root.after(1000, self._check_heartbeat_health)
+
+    def _fault_stop(self, reason: str) -> None:
+        """Operator-side decision to stop the machine on detected fault.
+
+        Forces local state to STOP with the given reason and best-effort
+        sends a comm_fail frame to the MCU so its echo carries the same
+        reason (rather than overwriting our UI with 'software stop').
+        """
+        self.current_mcu_state = "stop"
+        self.current_reason = reason
+        self.state_var.set("STOP")
+        self.reason_var.set(reason)
+        self._refresh_state_controls()
+        if self.sock:
+            try:
+                self.sock.sendall(protocol.encode_comm_fail())
+                self.log("Sent: comm_fail (operator fault stop)")
+            except Exception:
+                pass  # Connection likely already broken; on_disconnect cleans up.
 
     def on_connect(self):
         host = self.host_var.get().strip() or "127.0.0.1"
@@ -273,7 +371,10 @@ class OperatorApp:
                 self.sock = None
             return
         self._stream_parser.reset()
-        self._last_rx_time = None
+        # Seed _last_rx_time so the 5 s connection-health timer starts from
+        # connect — otherwise a server that goes silent immediately (e.g. Ack
+        # Off on the MCU) would never trip the disconnect check.
+        self._last_rx_time = time.time()
         self._connection_healthy = True
         # Seed pong-tracking so the 3 s silence counter starts now, not from
         # whenever the previous session received its last frame.
@@ -281,6 +382,11 @@ class OperatorApp:
         self._heartbeat_healthy = True
         self.sensor_state = {sid: None for sid in SENSOR_IDS}
         self._refresh_sensor_display()
+        self.current_mcu_state = None
+        self.current_reason = None
+        self.state_var.set("—")
+        self.reason_var.set("—")
+        self._refresh_state_controls()
         self.recv_running = True
         self.recv_thread = threading.Thread(target=self._recv_loop, daemon=True)
         self.recv_thread.start()
@@ -319,6 +425,11 @@ class OperatorApp:
         self.disconnect_btn.configure(state=tk.DISABLED)
         self.host_edit.configure(state=tk.NORMAL)
         self.port_spin.configure(state=tk.NORMAL)
+        self.current_mcu_state = None
+        self.current_reason = None
+        self.state_var.set("—")
+        self.reason_var.set("—")
+        self._refresh_state_controls()
         self.log("Disconnected.")
 
     def send_hex(self):
