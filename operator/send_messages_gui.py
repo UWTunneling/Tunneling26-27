@@ -12,9 +12,14 @@ from tkinter import ttk
 from pathlib import Path
 import sys
 
+from PySide6.QtWidgets import QApplication, QMainWindow
+from PySide6.QtUiTools import QUiLoader
+from PySide6.QtCore import QFile
+
 # Allow importing protocol.py from the project root regardless of cwd.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import protocol
+
 
 
 SENSOR_IDS: tuple[str, ...] = (
@@ -468,6 +473,30 @@ class OperatorApp:
             self.toggle_btn.config(text="Heartbeat Off")
             self.log("Heartbeat disabled.")
 
+class OperatorWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+
+        loader = QUiLoader()
+        ui_file = QFile(r"operator\Operator GUI.ui")
+        ui_file.open(QFile.ReadOnly)
+
+        self.ui = loader.load(ui_file, self)
+        ui_file.close()
+        self.ui.show()
+
+        self.app = OperatorApp()
+        self.ui.Connect.toggled.connect(lambda checked: checked and self.app.on_connect())
+        self.ui.Disconnect.toggled.connect(lambda checked: checked and self.app.on_disconnect())
+        self.ui.Heartbeat.toggled.connect(lambda checked: checked and self.app.toggle_heartbeat())
+        self.ui.SoftwareStart.toggled.connect(lambda checked: checked and self.app.on_software_start())
+        self.ui.SoftwareStop.toggled.connect(lambda checked: checked and self.app.on_software_stop())
+
+    def handle_send(self):
+        print("Send clicked")
+
+    def handle_clear(self):
+        print("Clear clicked")
 
 def main():
     app = OperatorApp()
@@ -475,4 +504,8 @@ def main():
 
 
 if __name__ == "__main__":
+    app = QApplication([])
+    window = OperatorWindow()
+    window.show()
+    app.exec()
     main()
