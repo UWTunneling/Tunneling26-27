@@ -12,9 +12,16 @@ from tkinter import ttk
 from pathlib import Path
 import sys
 
-from PySide6.QtWidgets import QApplication, QMainWindow
+
+from PySide6.QtWidgets import QApplication, QMainWindow, QWidget
 from PySide6.QtUiTools import QUiLoader
-from PySide6.QtCore import QFile
+from PySide6.QtGui import QPainter, QColor, QPen, QFont
+from PySide6.QtCore import Qt, QRectF, QFile, QPointF
+from PySide6.QtWidgets import QVBoxLayout, QHBoxLayout
+
+
+
+
 
 # Allow importing protocol.py from the project root regardless of cwd.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -276,6 +283,8 @@ class OperatorApp:
         if sid is None:
             return
         self.sensor_state[sid] = msg["value"]
+        if sid == "voltage_1":
+            self.voltage1_meter.setValue(self.sensor_state[sid])
 
     def _refresh_sensor_display(self) -> None:
         """Redraw every sensor label from self.sensor_state."""
@@ -491,12 +500,177 @@ class OperatorWindow(QMainWindow):
         self.ui.Heartbeat.toggled.connect(lambda checked: checked and self.app.toggle_heartbeat())
         self.ui.SoftwareStart.toggled.connect(lambda checked: checked and self.app.on_software_start())
         self.ui.SoftwareStop.toggled.connect(lambda checked: checked and self.app.on_software_stop())
+        self.state = "Stop"
 
-    def handle_send(self):
-        print("Send clicked")
+        ##Temp 1 Meter
+        self.temp1_meter = RectangularMeter(None, "Temp 1", 40, 80)
+        layout = self.ui.Temp1.layout()
+        if layout is None:
+            layout = QHBoxLayout(self.ui.Temp1)
+            self.ui.Temp1.setLayout(layout)
+        self.temp1_meter.setMinimumSize(180, 60)
+        self.temp1_meter.setValue(60)
+        layout.addWidget(self.temp1_meter)
 
-    def handle_clear(self):
-        print("Clear clicked")
+        ##Temp 2 Meter
+        self.temp2_meter = RectangularMeter(None, "Temp 2", 40, 80)
+        layout = self.ui.Temp2.layout()
+        if layout is None:
+            layout = QHBoxLayout(self.ui.Temp2)
+            self.ui.Temp2.setLayout(layout)
+        self.temp2_meter.setMinimumSize(180, 60)
+        self.temp2_meter.setValue(60)
+        layout.addWidget(self.temp2_meter)
+
+        ##Temp 3 Meter
+        self.temp3_meter = RectangularMeter(None, "Temp 3", 40, 80)
+        layout = self.ui.Temp3.layout()
+        if layout is None:
+            layout = QHBoxLayout(self.ui.Temp3)
+            self.ui.Temp3.setLayout(layout)
+        self.temp3_meter.setMinimumSize(180, 60)
+        self.temp3_meter.setValue(60)
+        layout.addWidget(self.temp3_meter)
+
+        ##Voltage 1 Meter
+        self.voltage1_meter = RectangularMeter(None, "Voltage 1", 0, 10)
+        layout = self.ui.Voltage1.layout()
+        if layout is None:
+            layout = QHBoxLayout(self.ui.Voltage1)
+            self.ui.Voltage1.setLayout(layout)
+        self.voltage1_meter.setMinimumSize(180, 60)
+        self.voltage1_meter.setValue(5)
+        layout.addWidget(self.voltage1_meter)
+
+        ##Voltage 2 Meter
+        self.voltage2_meter = RectangularMeter(None, "Voltage 2", 150, 180)
+        layout = self.ui.Voltage2.layout()
+        if layout is None:
+            layout = QHBoxLayout(self.ui.Voltage2)
+            self.ui.Voltage2.setLayout(layout)
+        self.voltage2_meter.setMinimumSize(180, 60)
+        self.voltage2_meter.setValue(165)
+        layout.addWidget(self.voltage2_meter)
+
+        ##Voltage 3 Meter
+        self.voltage3_meter = RectangularMeter(None, "Voltage 3", 450, 510)
+        layout = self.ui.Voltage3.layout()
+        if layout is None:
+            layout = QHBoxLayout(self.ui.Voltage3)
+            self.ui.Voltage3.setLayout(layout)
+        self.voltage3_meter.setMinimumSize(180, 60)
+        self.voltage3_meter.setValue(480)
+        layout.addWidget(self.voltage3_meter)
+        
+        ##Current 1 Meter
+        self.current1_meter = RectangularMeter(None, "Current 1", 15, 35)
+        layout = self.ui.Current1.layout()
+        if layout is None:
+            layout = QHBoxLayout(self.ui.Current1)
+            self.ui.Current1.setLayout(layout)
+        self.current1_meter.setMinimumSize(180, 60)
+        self.current1_meter.setValue(25)
+        layout.addWidget(self.current1_meter)
+
+        ##Current 2 Meter
+        self.current2_meter = RectangularMeter(None, "Current 2", 15, 35)
+        layout = self.ui.Current2.layout()
+        if layout is None:
+            layout = QHBoxLayout(self.ui.Current2)
+            self.ui.Current2.setLayout(layout)
+        self.current2_meter.setMinimumSize(180, 60)
+        self.current2_meter.setValue(25)
+        layout.addWidget(self.current2_meter)
+
+        ##Flow
+        self.flow_meter = RectangularMeter(None, "Flow", 25, 75)
+        layout = self.ui.Flow.layout()
+        if layout is None:
+            layout = QHBoxLayout(self.ui.Flow)
+            self.ui.Flow.setLayout(layout)
+        self.flow_meter.setMinimumSize(180, 60)
+        self.flow_meter.setValue(50)
+        layout.addWidget(self.flow_meter)
+
+        ##RPM
+        self.RPM_meter = RectangularMeter(None, "RPM", 2500, 3500)
+        layout = self.ui.RPM.layout()
+        if layout is None:
+            layout = QHBoxLayout(self.ui.RPM)
+            self.ui.RPM.setLayout(layout)
+        self.RPM_meter.setMinimumSize(180, 60)
+        self.RPM_meter.setValue(3000)
+        layout.addWidget(self.RPM_meter)
+    
+    def update_state(self, new_State):
+        self.state = new_State
+
+
+class RectangularMeter(QWidget):
+    def __init__(self, parent=None, name = "Empty", min_value=0, max_value=100, low_alarm = None, high_alarm = None):
+        super().__init__(parent)
+        self.min_value = min_value
+        self.max_value = max_value
+        self.low_alarm = low_alarm
+        self.high_alarm = high_alarm
+        self.name = name
+        self.value = 0
+
+    def setValue(self, v):
+        self.value = max(self.min_value, min(v, self.max_value))
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        w = self.width()
+        h = self.height()
+
+        # Outer border
+        pen = QPen(Qt.black, 2)
+        painter.setPen(pen)
+        painter.setBrush(Qt.NoBrush)
+        painter.drawRect(self.rect())
+
+        # Fill amount
+        ratio = (self.value - self.min_value) / (self.max_value - self.min_value)
+        fill_width = ratio * w
+
+        painter.setBrush(QColor(0, 180, 0))
+        painter.setPen(Qt.NoPen)
+        painter.drawRect(QRectF(0, 0, fill_width, h))
+
+        painter.setPen(Qt.black)
+        self.label_text = self.name
+        painter.drawText(0, 0, w, 20, Qt.AlignCenter, self.label_text)
+
+
+        # Ticks + labels
+        painter.setPen(QPen(Qt.black, 1))
+
+        tick_values = [
+            self.min_value,
+            self.min_value + 0.25*(self.max_value - self.min_value),
+            self.min_value + 0.50*(self.max_value - self.min_value),
+            self.min_value + 0.75*(self.max_value - self.min_value),
+            self.max_value
+        ]
+
+        if self.low_alarm is not None:
+            tick_values.append(self.low_alarm)
+        if self.high_alarm is not None: 
+            tick_values.append(self.high_alarm)
+
+        for v in tick_values:
+            x = int((v - self.min_value) / (self.max_value - self.min_value) * w)
+            painter.drawLine(x, h/2, x, h/2 + 6)
+
+            label = f"{v:.1f}".rstrip("0").rstrip(".")
+            painter.drawText(x - 10, h - 5, label)
+
+
+
 
 def main():
     app = OperatorApp()
@@ -509,3 +683,5 @@ if __name__ == "__main__":
     window.show()
     app.exec()
     main()
+
+
