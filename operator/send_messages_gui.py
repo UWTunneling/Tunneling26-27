@@ -4,6 +4,7 @@ TCP client with simple tkinter UI: log sent/received, send hex bytes.
 No extra deps (uses standard library tkinter).
 """
 
+import queue
 import socket
 import time
 import threading
@@ -61,8 +62,11 @@ def parse_hex(line: str) -> bytes | None:
 
 
 class OperatorApp:
-    def __init__(self):
-        self.root = tk.Tk()
+    def __init__(self, root: tk.Misc | None = None):
+        # Accept an optional pre-created root (Tk or Toplevel) so that test
+        # suites can share a single Tk interpreter across many OperatorApp
+        # instances without creating/destroying Tk() for every test.
+        self.root = root if root is not None else tk.Tk()
         self.root.title("Operator — TCP client")
         self.root.minsize(480, 360)
         self.root.geometry("560x420")
@@ -80,6 +84,13 @@ class OperatorApp:
         self._last_pong_time: float | None = None
         self._heartbeat_healthy: bool = True
         self._heartbeat_check_id: str | None = None
+
+        # Thread-safe receive queue: _recv_loop puts items here; the main
+        # thread drains it via _poll_rx_queue (scheduled with root.after).
+        # This avoids calling root.after() from the background recv thread,
+        # which is unsafe without a running mainloop.
+        self._rx_queue: queue.SimpleQueue = queue.SimpleQueue()
+        self._poll_id: str | None = None
 
         # Decoded sensor state — updated as frames arrive from the microcontroller.
         self.sensor_state: dict[str, float | None] = {sid: None for sid in SENSOR_IDS}
@@ -181,6 +192,11 @@ class OperatorApp:
         self.log_text.configure(state=tk.DISABLED)
 
     def _recv_loop(self):
+        """Background thread: receive bytes and queue them for the main thread.
+
+        All tkinter interaction is off-limits here.  Decoded messages are put
+        into self._rx_queue and drained by _poll_rx_queue on the main thread.
+        """
         if self.sock:
             self.sock.settimeout(0.25)
         while self.recv_running and self.sock:
@@ -189,22 +205,8 @@ class OperatorApp:
                 if not data:
                     break
                 msgs = self._stream_parser.feed(data)
-                hex_str = data.hex(" ")
                 self._last_rx_time = time.time()
-
-                def update(h=hex_str, m=msgs):
-                    self.log(f"Recv ({len(h.replace(' ', '')) // 2} B): {h}")
-                    for msg in m:
-                        mtype = msg.get("type")
-                        if mtype == "ping":
-                            self._last_pong_time = time.time()
-                        elif mtype == "state_transition":
-                            self._apply_state_transition(msg)
-                        else:
-                            self._apply_sensor_update(msg)
-                        self.log(f"  → {protocol.describe(msg)}")
-                    self._refresh_sensor_display()
-                self.root.after(0, update)
+                self._rx_queue.put(("rx", data.hex(" "), msgs))
             except socket.timeout:
                 continue
             except (OSError, ConnectionResetError, BrokenPipeError):
@@ -212,13 +214,41 @@ class OperatorApp:
             except Exception:
                 break
 
-        # If recv_running is still True we didn't disconnect deliberately —
-        # the server dropped the connection. Clean up the UI on the main thread.
+        # If recv_running is still True, the server dropped us unexpectedly.
         if self.recv_running:
-            def on_lost():
+            self._rx_queue.put(("disconnect", None, None))
+
+    def _poll_rx_queue(self) -> None:
+        """Main-thread poller: drain _rx_queue and update the UI.
+
+        Scheduled by on_connect() via root.after(50, ...) and reschedules
+        itself as long as the operator is connected.  Because it always runs
+        on the main thread, all tkinter calls are safe.
+        """
+        while True:
+            try:
+                kind, hex_str, msgs = self._rx_queue.get_nowait()
+            except queue.Empty:
+                break
+            if kind == "rx":
+                self.log(f"Recv ({len(hex_str.replace(' ', '')) // 2} B): {hex_str}")
+                for msg in msgs:
+                    mtype = msg.get("type")
+                    if mtype == "ping":
+                        self._last_pong_time = time.time()
+                    elif mtype == "state_transition":
+                        self._apply_state_transition(msg)
+                    else:
+                        self._apply_sensor_update(msg)
+                    self.log(f"  → {protocol.describe(msg)}")
+                self._refresh_sensor_display()
+            elif kind == "disconnect":
                 self.log("Connection lost — server disconnected.")
                 self.on_disconnect()
-            self.root.after(0, on_lost)
+                return  # on_disconnect cancels _poll_id; stop rescheduling
+
+        if self.recv_running:
+            self._poll_id = self.root.after(50, self._poll_rx_queue)
 
     def _apply_state_transition(self, msg: dict) -> None:
         """Update MCU state mirror + UI labels from a decoded state_transition frame."""
@@ -390,6 +420,7 @@ class OperatorApp:
         self.recv_running = True
         self.recv_thread = threading.Thread(target=self._recv_loop, daemon=True)
         self.recv_thread.start()
+        self._poll_id = self.root.after(50, self._poll_rx_queue)
         self._send_heartbeat()
         self._check_connection_health()
         self._check_heartbeat_health()
@@ -401,6 +432,9 @@ class OperatorApp:
         self.log("Connected.")
 
     def on_disconnect(self):
+        if self._poll_id is not None:
+            self.root.after_cancel(self._poll_id)
+            self._poll_id = None
         if self._heartbeat_id is not None:
             self.root.after_cancel(self._heartbeat_id)
             self._heartbeat_id = None
