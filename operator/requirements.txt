@@ -1,7 +1,8 @@
 # Python Requirements
 #
-# CLI (send_messages.py) and GUI (send_messages_gui.py): standard library only.
-# GUI uses tkinter (included with Python on Windows/macOS/Linux).
+# CLI (send_messages.py): standard library only.
+# GUI (send_messages_gui.py): PySide6.
 #
-# Minimum Python: 3.6+
+# Minimum Python: 3.10+
 # Cross-platform: Windows, macOS, Linux
+PySide6>=6.7

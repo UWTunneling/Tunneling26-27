@@ -1,0 +1,5 @@
+# Everything needed to run the test suite:
+#   pip install -r requirements-dev.txt
+#   python -m pytest tests
+-r operator/requirements.txt
+pytest>=8
