@@ -167,7 +167,7 @@ You can test communication **without the STM32 board** using:
 - **Mock microcontroller** — A TCP server that behaves like the board (send/receive raw hex bytes).
 - **Operator** — A TCP client that connects to either the mock or the real board and sends/receives hex bytes.
 
-Both have **CLI** (terminal) and **GUI** (tkinter) versions. All use **standard library only** (no `pip install` required).
+Both have **CLI** (terminal) and **GUI** versions. The mock microcontroller uses the standard library only (tkinter GUI); the operator GUI needs PySide6 (`pip install -r operator/requirements.txt`).
 
 ### Quick start: start the sim system
 
@@ -291,6 +291,19 @@ You: quit
 Disconnecting...
 Connection closed. Total messages sent: 3
 ```
+
+---
+
+## Running Tests
+
+The tests cover the binary protocol, the MCU safety state machine, the sensor simulator, and the operator backend talking to a fake MCU over localhost. They don't need the board or any GUI windows.
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest tests
+```
+
+Use a Python 3.10+ that includes tkinter. GitHub Actions runs the same suite on every pull request (`.github/workflows/tests.yml`), and `main` only accepts PRs that pass it and have an admin approval.
 
 ---
 
