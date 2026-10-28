@@ -1,9 +1,9 @@
 Communication framework: TCP
 TCP (Transmission Control Protocol) is a core internet protocol that enables reliable, ordered, and error-checked delivery of data between applications over an IP network. It establishes a connection using a handshake process, manages data flow with acknowledgments and retransmissions, and adjusts sending rates to prevent congestion. By ensuring that data arrives intact and in the correct order, TCP provides a dependable communication layer for applications like web browsing, email, and file transfer.
 
-We will be implementing a more rigid protocol than we technically need but it is good practice to understand communication between computers. 
+We will be implementing a rigid protocol than we technically need but it is good practice to understand communication between computers. 
 
-Challenges
+Challenges!
 Our communication protocol needs to be resilient to delayed messages, dropped messages, corrupted messages. 
 It needs to be able to identify and react to lost connection, it needs to be able to monitor the health of the connection. 
 
