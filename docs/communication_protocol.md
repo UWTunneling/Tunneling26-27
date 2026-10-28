@@ -3,7 +3,7 @@ TCP (Transmission Control Protocol) is a core internet protocol that enables rel
 
 We will be implementing a more rigid protocol than we technically need but it is good practice to understand communication between computers. 
 
-Challenges
+Challenges!
 Our communication protocol needs to be resilient to delayed messages, dropped messages, corrupted messages. 
 It needs to be able to identify and react to lost connection, it needs to be able to monitor the health of the connection. 
 
