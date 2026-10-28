@@ -53,6 +53,8 @@ To correctly identify the ending of a message we need to know how long it is. Th
 Contents
 This section is the actual payload of the message. The first byte of the contents is always the message type ID. Remaining bytes depend on the type. Multi-byte numeric values are sent big-endian (most significant byte first, network byte order).
 
+
+
 Message type IDs:
   0x01  Ping / heartbeat
   0x10  Temperature
