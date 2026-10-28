@@ -5,6 +5,7 @@ We will be implementing a more rigid protocol than we technically need but it is
 
 Challenges
 Our communication protocol needs to be resilient to delayed messages, dropped messages, corrupted messages. 
+
 It needs to be able to identify and react to lost connection, it needs to be able to monitor the health of the connection. 
 
 We need to be able to identify the start of the message, encode and decode the contents of messages, and be able to verify the integrity of the message (if there was corruption)
