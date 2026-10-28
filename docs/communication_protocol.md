@@ -11,8 +11,10 @@ We need to be able to identify the start of the message, encode and decode the c
 
 Priorities
 We do not need to guarantee that every message goes through. 
-We CANNOT read corrupted messages. 
+
 We need to be able to determine quickly if communications have broken and react appropriately on both sides. 
+
+
 
 General Notes
 In this document we will be using Hexadecimal to represent the bytes we are sending. 
