@@ -3,6 +3,6 @@
 # All dependencies are built-in Python 3.x standard library modules.
 # No external packages need to be installed.
 #
-# Minimum Python version: 3.6+
+# Minimum Python version: 3.6 +
 #
 # Cross-platform support: Windows, macOS, and Linux
