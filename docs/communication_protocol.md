@@ -55,6 +55,9 @@ This section is the actual payload of the message. The first byte of the content
 
 
 
+
+
+
 Message type IDs:
   0x01  Ping / heartbeat
   0x10  Temperature
