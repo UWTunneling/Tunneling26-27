@@ -79,7 +79,7 @@ For example, suppose a message contains three bytes: 0x12, 0x34, and 0x56. Addin
  0x12 + 0x34 + 0x56 = 0x9C.
  Since this already fits in one byte, the checksum is 0x9C. If the sum had been larger than one byte (for example 0x1A3), only the last byte (0xA3) would be kept. If the receiver’s computed checksum does not match, it indicates that the data was corrupted or altered in transit.
 	
-Example messages
+Example messages 
 For a heartbeat or ping message, the contents consist of a single byte with the value 0x01, which represents the heartbeat message type. Because the checksum is calculated using only the contents, the checksum is simply the sum of that one byte, which is also 0x01. The complete heartbeat message in hexadecimal is therefore 0xAA DD 01 01 01, where the final 0x01 is the checksum.
 For a temperature message, let’s contents are four bytes: 0x10 (type), 0x01 (sensor 1), and value 2500 (25.00 °C in 0.01 °C) as two bytes 0x09 0xC4. The length byte is 0x04. Sum of contents: 0x10 + 0x01 + 0x09 + 0xC4 = 0xDE → checksum 0xDE. The full temperature message is 0xAA DD 04 10 01 09 C4 DE, with each field defining how the message should be interpreted.
 
