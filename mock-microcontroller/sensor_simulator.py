@@ -1,5 +1,7 @@
 
 """
+PR Comment Test
+
 Each sensor drifts toward a configurable setpoint at a controllable rate,
 with independent Gaussian noise added per tick. Setpoint, step_size, and
 noise are mutable at any time (including mid-run), so values can sit inside
