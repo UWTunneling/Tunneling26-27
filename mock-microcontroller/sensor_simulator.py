@@ -86,29 +86,61 @@ def _cfg(
 
 
 DEFAULT_CONFIGS: dict[str, SensorConfig] = {
-    # Temperatures: moderate noise, slow mean-reversion, unclamped
-    "temp_1":    _cfg(0.0,   120.0,  step_size=0.04, noise_frac=0.010),
-    "temp_2":    _cfg(0.0,   120.0,  step_size=0.04, noise_frac=0.010),
-    "temp_3":    _cfg(0.0,   120.0,  step_size=0.04, noise_frac=0.010),
-    # RPM: faster reversion, moderate noise
-    "rpm":       _cfg(0.0,  6000.0,  step_size=0.06, noise_frac=0.008),
-    # Voltage rails: tight noise, fast reversion (regulated rails are stiff)
-    "voltage_1": _cfg(450.0, 510.0,  step_size=0.10, noise_frac=0.004),  # 480 V main
-    "voltage_2": _cfg(110.0, 130.0,  step_size=0.10, noise_frac=0.004),  # 120 V
-    "voltage_3": _cfg(4.7,   5.3,    step_size=0.10, noise_frac=0.004),  # 5 V rail
-    # Currents: moderate everything
-    "current_1": _cfg(0.0,   50.0,   step_size=0.05, noise_frac=0.010),
-    "current_2": _cfg(0.0,   50.0,   step_size=0.05, noise_frac=0.010),
-    # Flow: slow reversion, moderate noise
-    "flow_1":    _cfg(0.0,  100.0,   step_size=0.04, noise_frac=0.010),
+    # Nominal (min_val, max_val) = the "no warning" band from the sensor spec
+    # table (between Low Warn and High Warn). Setpoint defaults to its middle.
+    # Temperatures 1-4 (thermocouple, °C): warn 5 / 80
+    "temp_1":          _cfg(5.0,    80.0,  step_size=0.04, noise_frac=0.010),
+    "temp_2":          _cfg(5.0,    80.0,  step_size=0.04, noise_frac=0.010),
+    "temp_3":          _cfg(5.0,    80.0,  step_size=0.04, noise_frac=0.010),
+    "temp_4":          _cfg(5.0,    80.0,  step_size=0.04, noise_frac=0.010),
+    # Gas MQ-2 (% LEL): high warn 10
+    "gas_1":           _cfg(0.0,    10.0,  step_size=0.05, noise_frac=0.010),
+    # Muck pressure 1-2 (PSI): thresholds TBD — placeholder range
+    "muck_pressure_1": _cfg(0.0,   100.0,  step_size=0.05, noise_frac=0.010),
+    "muck_pressure_2": _cfg(0.0,   100.0,  step_size=0.05, noise_frac=0.010),
+    # Cooling temp (°F): thresholds TBD — placeholder range
+    "cooling_temp_1":  _cfg(40.0,  100.0,  step_size=0.04, noise_frac=0.010),
+    # Soil treatment pressure 2 (PSI): warn 20 / 35
+    "soil_pressure_2": _cfg(20.0,   35.0,  step_size=0.05, noise_frac=0.010),
+    # Current 1-2 (A): warn 2 / 38
+    "current_1":       _cfg(2.0,    38.0,  step_size=0.05, noise_frac=0.010),
+    "current_2":       _cfg(2.0,    38.0,  step_size=0.05, noise_frac=0.010),
+    # RPM: high warn 60
+    "rpm":             _cfg(0.0,    60.0,  step_size=0.06, noise_frac=0.008),
+    # Voltage (480 V input): tight noise, fast reversion — warn 440 / 510
+    "voltage_1":       _cfg(440.0, 510.0,  step_size=0.10, noise_frac=0.004),
+    # Current (480 V input) (A): high warn 100
+    "current_3":       _cfg(0.0,   100.0,  step_size=0.05, noise_frac=0.010),
+    # Voltage (VFD capacitor bank): low warn 50, no upper limit — placeholder upper
+    "voltage_2":       _cfg(50.0,  650.0,  step_size=0.10, noise_frac=0.004),
+    # Supply temp 22 kW / 0.4 kW drive (°C): high warn 90
+    "supply_temp_1":   _cfg(0.0,    90.0,  step_size=0.04, noise_frac=0.010),
+    "supply_temp_2":   _cfg(0.0,    90.0,  step_size=0.04, noise_frac=0.010),
+    # Linear displacement (ft): no limits — placeholder range
+    "linear_disp_1":   _cfg(0.0,   100.0,  step_size=0.02, noise_frac=0.005),
+    # Deviation from nominal direction (°): high warn 3
+    "deviation_1":     _cfg(0.0,     3.0,  step_size=0.05, noise_frac=0.010),
+    # Hydraulic jack displacement (in): warn 2 / 24
+    "jack_disp_1":     _cfg(2.0,    24.0,  step_size=0.05, noise_frac=0.010),
+    # HPU pressure inlet (bar): warn 6 / 8
+    "hpu_pressure_1":  _cfg(6.0,     8.0,  step_size=0.05, noise_frac=0.010),
 }
 
 SENSOR_IDS: tuple[str, ...] = (
-    "temp_1", "temp_2", "temp_3",
-    "rpm",
-    "voltage_1", "voltage_2", "voltage_3",
+    "temp_1", "temp_2", "temp_3", "temp_4",
+    "gas_1",
+    "muck_pressure_1", "muck_pressure_2",
+    "cooling_temp_1",
+    "soil_pressure_2",
     "current_1", "current_2",
-    "flow_1",
+    "rpm",
+    "voltage_1", "current_3",
+    "voltage_2",
+    "supply_temp_1", "supply_temp_2",
+    "linear_disp_1",
+    "deviation_1",
+    "jack_disp_1",
+    "hpu_pressure_1",
 )
 
 # Simulator

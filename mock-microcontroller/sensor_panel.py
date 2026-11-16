@@ -13,16 +13,27 @@ from tkinter import ttk
 from sensor_simulator import SensorSimulator, SENSOR_IDS, DEFAULT_CONFIGS
 
 SENSOR_META: dict[str, tuple[str, str]] = {
-    "temp_1":    ("Temp 1",      "°C"),
-    "temp_2":    ("Temp 2",      "°C"),
-    "temp_3":    ("Temp 3",      "°C"),
-    "rpm":       ("RPM",         ""),
-    "voltage_1": ("480 V rail",  "V"),
-    "voltage_2": ("120 V rail",  "V"),
-    "voltage_3": ("5 V rail",    "V"),
-    "current_1": ("Current 1",   "A"),
-    "current_2": ("Current 2",   "A"),
-    "flow_1":    ("Flow 1",      "L/min"),
+    "temp_1":          ("Temp 1",        "°C"),
+    "temp_2":          ("Temp 2",        "°C"),
+    "temp_3":          ("Temp 3",        "°C"),
+    "temp_4":          ("Temp 4",        "°C"),
+    "gas_1":           ("Gas",           "%LEL"),
+    "muck_pressure_1": ("Muck Press 1",  "PSI"),
+    "muck_pressure_2": ("Muck Press 2",  "PSI"),
+    "cooling_temp_1":  ("Cooling Temp",  "°F"),
+    "soil_pressure_2": ("Soil Press 2",  "PSI"),
+    "current_1":       ("Current 1",     "A"),
+    "current_2":       ("Current 2",     "A"),
+    "rpm":             ("RPM",           ""),
+    "voltage_1":       ("480 V input",   "V"),
+    "current_3":       ("480 V current", "A"),
+    "voltage_2":       ("VFD cap bank",  "V"),
+    "supply_temp_1":   ("22 kW drive",   "°C"),
+    "supply_temp_2":   ("0.4 kW drive",  "°C"),
+    "linear_disp_1":   ("Linear disp",   "ft"),
+    "deviation_1":     ("Deviation",     "°"),
+    "jack_disp_1":     ("Jack disp",     "in"),
+    "hpu_pressure_1":  ("HPU inlet",     "bar"),
 }
 
 DEFAULT_TICK_MS = 200
@@ -32,7 +43,8 @@ def _fmt(sid: str, value: float) -> str:
     _, unit = SENSOR_META.get(sid, (sid, ""))
     if sid == "rpm":
         return f"{value:.0f}"
-    if unit == "°C":
+    # Show temperatures (°C and °F) with 1 decimal place
+    if unit in ("°C", "°F"):
         return f"{value:.1f}"
     return f"{value:.3f}"
 
