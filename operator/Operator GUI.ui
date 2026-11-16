@@ -13,6 +13,12 @@
   <property name="windowTitle">
    <string>Dialog</string>
   </property>
+  <property name="styleSheet">
+<string notr="true">QDialog#Dialog {
+background-color: #f5f0fa;
+color: #222222;
+}</string>
+</property>
   <widget class="QWidget" name="ConnectionState" native="true">
    <property name="geometry">
     <rect>
@@ -45,7 +51,7 @@ border-radius: 8px;
         <bool>true</bool>
        </property>
        <property name="styleSheet">
-        <string notr="true"/>
+        <string notr="true">color: #222222; background-color: transparent;</string>
        </property>
        <property name="frameShape">
         <enum>QFrame::Shape::NoFrame</enum>
@@ -62,6 +68,7 @@ border-radius: 8px;
       <widget class="QRadioButton" name="Connect">
        <property name="styleSheet">
         <string notr="true">background-color: #fff4b3;
+color: #222222;
 border: 1px solid #e6d784;
 border-radius: 10px;
 padding: 8px;
@@ -79,6 +86,7 @@ padding: 8px;
       <widget class="QRadioButton" name="Disconnect">
        <property name="styleSheet">
         <string notr="true">background-color: #fff4b3;
+color: #222222;
 border: 1px solid #e6d784;
 border-radius: 10px;
 padding: 8px;
@@ -96,6 +104,7 @@ padding: 8px;
       <widget class="QCheckBox" name="Heartbeat">
        <property name="styleSheet">
         <string notr="true">background-color: #fff4b3;
+color: #222222;
 border: 1px solid #e6d784;
 border-radius: 10px;
 padding: 8px;
@@ -151,6 +160,7 @@ padding: 8px;
         <widget class="QLabel" name="StateLabel">
          <property name="styleSheet">
           <string notr="true">background-color: #fff4b3;
+color: #222222;
 border: 1px solid #e6d784;
 border-radius: 10px;
 padding: 8px;
@@ -165,6 +175,7 @@ padding: 8px;
         <widget class="QLabel" name="CurrState">
          <property name="styleSheet">
           <string notr="true">background-color: #fff4b3;
+color: #222222;
 border: 1px solid #e6d784;
 border-radius: 10px;
 padding: 8px;
@@ -183,6 +194,7 @@ padding: 8px;
         <widget class="QLabel" name="ReasonLabel">
          <property name="styleSheet">
           <string notr="true">background-color: #fff4b3;
+color: #222222;
 border: 1px solid #e6d784;
 border-radius: 10px;
 padding: 8px;
@@ -197,6 +209,7 @@ padding: 8px;
         <widget class="QLabel" name="CurrReason">
          <property name="styleSheet">
           <string notr="true">background-color: #fff4b3;
+color: #222222;
 border: 1px solid #e6d784;
 border-radius: 10px;
 padding: 8px;
@@ -213,6 +226,7 @@ padding: 8px;
       <widget class="QRadioButton" name="SoftwareStart">
        <property name="styleSheet">
         <string notr="true">background-color: #fff4b3;
+color: #222222;
 border: 1px solid #e6d784;
 border-radius: 10px;
 padding: 8px;
@@ -227,6 +241,7 @@ padding: 8px;
       <widget class="QRadioButton" name="SoftwareStop">
        <property name="styleSheet">
         <string notr="true">background-color: #fff4b3;
+color: #222222;
 border: 1px solid #e6d784;
 border-radius: 10px;
 padding: 8px;

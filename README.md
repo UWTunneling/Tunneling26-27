@@ -2,6 +2,7 @@
 
 This project enables bidirectional Ethernet communication between a laptop and an STM32H745ZI-Q Nucleo board. The board runs a TCP echo server that responds to messages and controls LEDs via simple commands.
 
+
 ## Project Overview
 
 The STM32 board acts as a TCP server listening on port **8080** with the IP address **192.168.1.10**. You can also test without hardware using the **mock microcontroller** (TCP server) and **operator** (TCP client), both with CLI and GUI — see [Mock Microcontroller and Operator](#mock-microcontroller-and-operator).
