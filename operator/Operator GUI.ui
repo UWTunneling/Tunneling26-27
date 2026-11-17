@@ -6,8 +6,8 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>602</width>
-    <height>480</height>
+    <width>780</width>
+    <height>600</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -263,8 +263,8 @@ padding: 8px;
     <rect>
      <x>10</x>
      <y>150</y>
-     <width>581</width>
-     <height>311</height>
+     <width>760</width>
+     <height>440</height>
     </rect>
    </property>
    <layout class="QVBoxLayout" name="GeneralFrame">
@@ -279,23 +279,29 @@ padding: 8px;
       <item>
        <widget class="QWidget" name="Temp3" native="true"/>
       </item>
-     </layout>
-    </item>
-    <item>
-     <layout class="QHBoxLayout" name="VoltageGraphs">
-      <item alignment="Qt::AlignmentFlag::AlignHCenter">
-       <widget class="QWidget" name="Voltage1" native="true"/>
-      </item>
       <item>
-       <widget class="QWidget" name="Voltage2" native="true"/>
-      </item>
-      <item>
-       <widget class="QWidget" name="Voltage3" native="true"/>
+       <widget class="QWidget" name="Temp4" native="true"/>
       </item>
      </layout>
     </item>
     <item>
-     <layout class="QHBoxLayout" name="CurrentFlowGraphs">
+     <layout class="QHBoxLayout" name="PressureGraphs">
+      <item>
+       <widget class="QWidget" name="Gas" native="true"/>
+      </item>
+      <item>
+       <widget class="QWidget" name="MuckPressure1" native="true"/>
+      </item>
+      <item>
+       <widget class="QWidget" name="MuckPressure2" native="true"/>
+      </item>
+      <item>
+       <widget class="QWidget" name="SoilPressure2" native="true"/>
+      </item>
+     </layout>
+    </item>
+    <item>
+     <layout class="QHBoxLayout" name="CurrentGraphs">
       <item>
        <widget class="QWidget" name="Current1" native="true"/>
       </item>
@@ -303,14 +309,49 @@ padding: 8px;
        <widget class="QWidget" name="Current2" native="true"/>
       </item>
       <item>
-       <widget class="QWidget" name="Flow" native="true"/>
+       <widget class="QWidget" name="Current3" native="true"/>
+      </item>
+      <item>
+       <widget class="QWidget" name="RPM" native="true"/>
       </item>
      </layout>
     </item>
     <item>
-     <layout class="QHBoxLayout" name="RPMandLog">
+     <layout class="QHBoxLayout" name="PowerGraphs">
       <item>
-       <widget class="QWidget" name="RPM" native="true"/>
+       <widget class="QWidget" name="Voltage1" native="true"/>
+      </item>
+      <item>
+       <widget class="QWidget" name="Voltage2" native="true"/>
+      </item>
+      <item>
+       <widget class="QWidget" name="SupplyTemp1" native="true"/>
+      </item>
+      <item>
+       <widget class="QWidget" name="SupplyTemp2" native="true"/>
+      </item>
+     </layout>
+    </item>
+    <item>
+     <layout class="QHBoxLayout" name="MotionGraphs">
+      <item>
+       <widget class="QWidget" name="CoolingTemp" native="true"/>
+      </item>
+      <item>
+       <widget class="QWidget" name="LinearDisp" native="true"/>
+      </item>
+      <item>
+       <widget class="QWidget" name="Deviation" native="true"/>
+      </item>
+      <item>
+       <widget class="QWidget" name="JackDisp" native="true"/>
+      </item>
+     </layout>
+    </item>
+    <item>
+     <layout class="QHBoxLayout" name="HPUandLog">
+      <item>
+       <widget class="QWidget" name="HPUPressure" native="true"/>
       </item>
       <item>
        <widget class="QTextEdit" name="Log">

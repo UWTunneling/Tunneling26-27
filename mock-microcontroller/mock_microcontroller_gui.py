@@ -48,13 +48,24 @@ SENSOR_LABELS: dict[str, tuple[str, str]] = {
     "temp_1": ("Temp 1", "°C"),
     "temp_2": ("Temp 2", "°C"),
     "temp_3": ("Temp 3", "°C"),
-    "rpm": ("RPM", ""),
-    "voltage_1": ("480 V", "V"),
-    "voltage_2": ("120 V", "V"),
-    "voltage_3": ("5 V", "V"),
+    "temp_4": ("Temp 4", "°C"),
+    "gas_1": ("Gas", "%LEL"),
+    "muck_pressure_1": ("Muck Press 1", "PSI"),
+    "muck_pressure_2": ("Muck Press 2", "PSI"),
+    "cooling_temp_1": ("Cooling Temp", "°F"),
+    "soil_pressure_2": ("Soil Press 2", "PSI"),
     "current_1": ("Current 1", "A"),
     "current_2": ("Current 2", "A"),
-    "flow_1": ("Flow 1", "L/min"),
+    "rpm": ("RPM", ""),
+    "voltage_1": ("480 V input", "V"),
+    "current_3": ("480 V current", "A"),
+    "voltage_2": ("VFD cap bank", "V"),
+    "supply_temp_1": ("22 kW drive", "°C"),
+    "supply_temp_2": ("0.4 kW drive", "°C"),
+    "linear_disp_1": ("Linear disp", "ft"),
+    "deviation_1": ("Deviation", "°"),
+    "jack_disp_1": ("Jack disp", "in"),
+    "hpu_pressure_1": ("HPU inlet", "bar"),
 }
 
 ESTOP_HOLD_MS = 3000  # hold time required to unlatch E-Stop
@@ -167,7 +178,7 @@ class MockApp:
         self.root = root if root is not None else tk.Tk()
         self.root.title("Mock microcontroller — TCP server")
         self.root.minsize(480, 360)
-        self.root.geometry("560x420")
+        self.root.geometry("560x520")
         self.server_thread = None
         self.conn = None
         self.mcu = MockMicrocontroller(simulator=simulator)
@@ -292,7 +303,8 @@ class MockApp:
             _, unit = SENSOR_LABELS.get(sid, (sid, ""))
             if sid == "rpm":
                 text = f"{val:.0f}"
-            elif unit == "°C":
+            # Show temperatures (°C and °F) with 1 decimal place
+            elif unit in ("°C", "°F"):
                 text = f"{val:.1f}"
             else:
                 text = f"{val:.2f}"
@@ -335,13 +347,24 @@ class MockApp:
                 protocol.encode_temperature(1, snap["temp_1"]),
                 protocol.encode_temperature(2, snap["temp_2"]),
                 protocol.encode_temperature(3, snap["temp_3"]),
-                protocol.encode_rpm(1, snap["rpm"]),
-                protocol.encode_voltage(1, snap["voltage_1"]),
-                protocol.encode_voltage(2, snap["voltage_2"]),
-                protocol.encode_voltage(3, snap["voltage_3"]),
+                protocol.encode_temperature(4, snap["temp_4"]),
+                protocol.encode_gas(1, snap["gas_1"]),
+                protocol.encode_muck_pressure(1, snap["muck_pressure_1"]),
+                protocol.encode_muck_pressure(2, snap["muck_pressure_2"]),
+                protocol.encode_cooling_temp(1, snap["cooling_temp_1"]),
+                protocol.encode_soil_pressure(2, snap["soil_pressure_2"]),
                 protocol.encode_current(1, snap["current_1"]),
                 protocol.encode_current(2, snap["current_2"]),
-                protocol.encode_flow(1, snap["flow_1"]),
+                protocol.encode_rpm(1, snap["rpm"]),
+                protocol.encode_voltage(1, snap["voltage_1"]),
+                protocol.encode_current(3, snap["current_3"]),
+                protocol.encode_voltage(2, snap["voltage_2"]),
+                protocol.encode_supply_temp(1, snap["supply_temp_1"]),
+                protocol.encode_supply_temp(2, snap["supply_temp_2"]),
+                protocol.encode_linear_disp(1, snap["linear_disp_1"]),
+                protocol.encode_deviation(1, snap["deviation_1"]),
+                protocol.encode_jack_disp(1, snap["jack_disp_1"]),
+                protocol.encode_hpu_pressure(1, snap["hpu_pressure_1"]),
             ])
             self._send_bytes(payload)
 

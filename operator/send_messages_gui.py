@@ -18,11 +18,20 @@ import protocol
 
 
 SENSOR_IDS = (
-    "temp_1", "temp_2", "temp_3",
-    "rpm",
-    "voltage_1", "voltage_2", "voltage_3",
+    "temp_1", "temp_2", "temp_3", "temp_4",
+    "gas_1",
+    "muck_pressure_1", "muck_pressure_2",
+    "cooling_temp_1",
+    "soil_pressure_2",
     "current_1", "current_2",
-    "flow_1",
+    "rpm",
+    "voltage_1", "current_3",
+    "voltage_2",
+    "supply_temp_1", "supply_temp_2",
+    "linear_disp_1",
+    "deviation_1",
+    "jack_disp_1",
+    "hpu_pressure_1",
 )
 
 
@@ -31,7 +40,9 @@ def _sensor_key(msg_type: str, sensor_id: int) -> str | None:
         return f"temp_{sensor_id}"
     if msg_type == "rpm":
         return "rpm"
-    if msg_type in ("voltage", "current", "flow"):
+    if msg_type in ("voltage", "current", "gas", "muck_pressure", "soil_pressure",
+                    "cooling_temp", "supply_temp", "linear_disp", "deviation",
+                    "jack_disp", "hpu_pressure"):
         return f"{msg_type}_{sensor_id}"
     return None
 
@@ -282,8 +293,12 @@ class OperatorWindow(QMainWindow):
         self.state_signal.connect(self.update_state)
 
         loader = QUiLoader()
-        ui_file = QFile(r"operator\Operator GUI.ui")
-        ui_file.open(QFile.ReadOnly)
+        # Find the .ui file next to this script so the GUI launches from any working directory
+        ui_path = Path(__file__).resolve().parent / "Operator GUI.ui"
+        ui_file = QFile(str(ui_path))
+        # Fail if the .ui file is missing instead of loading a blank window
+        if not ui_file.open(QFile.ReadOnly):
+            raise RuntimeError(f"Cannot open UI file {ui_path}: {ui_file.errorString()}")
 
         self.ui = loader.load(ui_file, self)
         ui_file.close()
@@ -322,123 +337,244 @@ class OperatorWindow(QMainWindow):
         self.state = "Stop"
 
         ##Temp 1 Meter
-        self.temp1_meter = RectangularMeter(None, "Temp 1", 40, 80)
+        self.temp1_meter = RectangularMeter(None, "Temp 1", min_value=-10, max_value=110, low_alarm=0, high_alarm=100, low_warn=5, high_warn=80)
         layout = self.ui.Temp1.layout()
         if layout is None:
             layout = QHBoxLayout(self.ui.Temp1)
             self.ui.Temp1.setLayout(layout)
         self.temp1_meter.setMinimumSize(180, 60)
-        self.temp1_meter.setValue(60)
+        self.temp1_meter.setValue(42.5)
         layout.addWidget(self.temp1_meter)
 
         ##Temp 2 Meter
-        self.temp2_meter = RectangularMeter(None, "Temp 2", 40, 80)
+        self.temp2_meter = RectangularMeter(None, "Temp 2", min_value=-10, max_value=110, low_alarm=0, high_alarm=100, low_warn=5, high_warn=80)
         layout = self.ui.Temp2.layout()
         if layout is None:
             layout = QHBoxLayout(self.ui.Temp2)
             self.ui.Temp2.setLayout(layout)
         self.temp2_meter.setMinimumSize(180, 60)
-        self.temp2_meter.setValue(60)
+        self.temp2_meter.setValue(42.5)
         layout.addWidget(self.temp2_meter)
 
         ##Temp 3 Meter
-        self.temp3_meter = RectangularMeter(None, "Temp 3", 40, 80)
+        self.temp3_meter = RectangularMeter(None, "Temp 3", min_value=-10, max_value=110, low_alarm=0, high_alarm=100, low_warn=5, high_warn=80)
         layout = self.ui.Temp3.layout()
         if layout is None:
             layout = QHBoxLayout(self.ui.Temp3)
             self.ui.Temp3.setLayout(layout)
         self.temp3_meter.setMinimumSize(180, 60)
-        self.temp3_meter.setValue(60)
+        self.temp3_meter.setValue(42.5)
         layout.addWidget(self.temp3_meter)
 
-        ##Voltage 1 Meter
-        self.voltage1_meter = RectangularMeter(None, "Voltage 1", 470, 490)
-        layout = self.ui.Voltage1.layout()
+        ##Temp 4 Meter
+        self.temp4_meter = RectangularMeter(None, "Temp 4", min_value=-10, max_value=110, low_alarm=0, high_alarm=100, low_warn=5, high_warn=80)
+        layout = self.ui.Temp4.layout()
         if layout is None:
-            layout = QHBoxLayout(self.ui.Voltage1)
-            self.ui.Voltage1.setLayout(layout)
-        self.voltage1_meter.setMinimumSize(180, 60)
-        self.voltage1_meter.setValue(480)
-        layout.addWidget(self.voltage1_meter)
+            layout = QHBoxLayout(self.ui.Temp4)
+            self.ui.Temp4.setLayout(layout)
+        self.temp4_meter.setMinimumSize(180, 60)
+        self.temp4_meter.setValue(42.5)
+        layout.addWidget(self.temp4_meter)
 
-        ##Voltage 2 Meter
-        self.voltage2_meter = RectangularMeter(None, "Voltage 2", 105, 135)
-        layout = self.ui.Voltage2.layout()
+        ##Gas (%LEL) Meter
+        self.gas_meter = RectangularMeter(None, "Gas (%LEL)", min_value=0, max_value=30, high_alarm=25, high_warn=10)
+        layout = self.ui.Gas.layout()
         if layout is None:
-            layout = QHBoxLayout(self.ui.Voltage2)
-            self.ui.Voltage2.setLayout(layout)
-        self.voltage2_meter.setMinimumSize(180, 60)
-        self.voltage2_meter.setValue(120)
-        layout.addWidget(self.voltage2_meter)
+            layout = QHBoxLayout(self.ui.Gas)
+            self.ui.Gas.setLayout(layout)
+        self.gas_meter.setMinimumSize(180, 60)
+        self.gas_meter.setValue(5)
+        layout.addWidget(self.gas_meter)
 
-        ##Voltage 3 Meter
-        self.voltage3_meter = RectangularMeter(None, "Voltage 3", 2, 8)
-        layout = self.ui.Voltage3.layout()
+        ##Muck Pressure 1 (PSI) Meter  (alarm/warn thresholds TBD)
+        self.muck_pressure1_meter = RectangularMeter(None, "Muck Pressure 1 (PSI)", min_value=0, max_value=100)
+        layout = self.ui.MuckPressure1.layout()
         if layout is None:
-            layout = QHBoxLayout(self.ui.Voltage3)
-            self.ui.Voltage3.setLayout(layout)
-        self.voltage3_meter.setMinimumSize(180, 60)
-        self.voltage3_meter.setValue(5)
-        layout.addWidget(self.voltage3_meter)
-        
+            layout = QHBoxLayout(self.ui.MuckPressure1)
+            self.ui.MuckPressure1.setLayout(layout)
+        self.muck_pressure1_meter.setMinimumSize(180, 60)
+        self.muck_pressure1_meter.setValue(50)
+        layout.addWidget(self.muck_pressure1_meter)
+
+        ##Muck Pressure 2 (PSI) Meter  (alarm/warn thresholds TBD)
+        self.muck_pressure2_meter = RectangularMeter(None, "Muck Pressure 2 (PSI)", min_value=0, max_value=100)
+        layout = self.ui.MuckPressure2.layout()
+        if layout is None:
+            layout = QHBoxLayout(self.ui.MuckPressure2)
+            self.ui.MuckPressure2.setLayout(layout)
+        self.muck_pressure2_meter.setMinimumSize(180, 60)
+        self.muck_pressure2_meter.setValue(50)
+        layout.addWidget(self.muck_pressure2_meter)
+
+        ##Cooling Temp (°F) Meter  (alarm/warn thresholds TBD)
+        self.cooling_temp_meter = RectangularMeter(None, "Cooling Temp (°F)", min_value=30, max_value=110)
+        layout = self.ui.CoolingTemp.layout()
+        if layout is None:
+            layout = QHBoxLayout(self.ui.CoolingTemp)
+            self.ui.CoolingTemp.setLayout(layout)
+        self.cooling_temp_meter.setMinimumSize(180, 60)
+        self.cooling_temp_meter.setValue(70)
+        layout.addWidget(self.cooling_temp_meter)
+
+        ##Soil Pressure 2 (PSI) Meter
+        self.soil_pressure2_meter = RectangularMeter(None, "Soil Pressure 2 (PSI)", min_value=0, max_value=60, low_alarm=15, high_alarm=50, low_warn=20, high_warn=35)
+        layout = self.ui.SoilPressure2.layout()
+        if layout is None:
+            layout = QHBoxLayout(self.ui.SoilPressure2)
+            self.ui.SoilPressure2.setLayout(layout)
+        self.soil_pressure2_meter.setMinimumSize(180, 60)
+        self.soil_pressure2_meter.setValue(27.5)
+        layout.addWidget(self.soil_pressure2_meter)
+
         ##Current 1 Meter
-        self.current1_meter = RectangularMeter(None, "Current 1", 15, 35)
+        self.current1_meter = RectangularMeter(None, "Current 1", min_value=0, max_value=60, low_alarm=0, high_alarm=55, low_warn=2, high_warn=38)
         layout = self.ui.Current1.layout()
         if layout is None:
             layout = QHBoxLayout(self.ui.Current1)
             self.ui.Current1.setLayout(layout)
         self.current1_meter.setMinimumSize(180, 60)
-        self.current1_meter.setValue(25)
+        self.current1_meter.setValue(20)
         layout.addWidget(self.current1_meter)
 
         ##Current 2 Meter
-        self.current2_meter = RectangularMeter(None, "Current 2", 15, 35)
+        self.current2_meter = RectangularMeter(None, "Current 2", min_value=0, max_value=60, low_alarm=0, high_alarm=55, low_warn=2, high_warn=38)
         layout = self.ui.Current2.layout()
         if layout is None:
             layout = QHBoxLayout(self.ui.Current2)
             self.ui.Current2.setLayout(layout)
         self.current2_meter.setMinimumSize(180, 60)
-        self.current2_meter.setValue(25)
+        self.current2_meter.setValue(20)
         layout.addWidget(self.current2_meter)
 
-        ##Flow
-        self.flow_meter = RectangularMeter(None, "Flow", 25, 75)
-        layout = self.ui.Flow.layout()
-        if layout is None:
-            layout = QHBoxLayout(self.ui.Flow)
-            self.ui.Flow.setLayout(layout)
-        self.flow_meter.setMinimumSize(180, 60)
-        self.flow_meter.setValue(50)
-        layout.addWidget(self.flow_meter)
-
-        ##RPM
-        self.RPM_meter = RectangularMeter(None, "RPM", 2500, 3500)
+        ##RPM Meter
+        self.RPM_meter = RectangularMeter(None, "RPM", min_value=0, max_value=80, high_warn=60)
         layout = self.ui.RPM.layout()
         if layout is None:
             layout = QHBoxLayout(self.ui.RPM)
             self.ui.RPM.setLayout(layout)
         self.RPM_meter.setMinimumSize(180, 60)
-        self.RPM_meter.setValue(3000)
+        self.RPM_meter.setValue(30)
         layout.addWidget(self.RPM_meter)
+
+        ##Voltage 480V Meter
+        self.voltage1_meter = RectangularMeter(None, "Voltage 480V", min_value=350, max_value=550, low_alarm=400, high_alarm=530, low_warn=440, high_warn=510)
+        layout = self.ui.Voltage1.layout()
+        if layout is None:
+            layout = QHBoxLayout(self.ui.Voltage1)
+            self.ui.Voltage1.setLayout(layout)
+        self.voltage1_meter.setMinimumSize(180, 60)
+        self.voltage1_meter.setValue(475)
+        layout.addWidget(self.voltage1_meter)
+
+        ##Current 480V Meter
+        self.current3_meter = RectangularMeter(None, "Current 480V", min_value=0, max_value=130, high_alarm=110, high_warn=100)
+        layout = self.ui.Current3.layout()
+        if layout is None:
+            layout = QHBoxLayout(self.ui.Current3)
+            self.ui.Current3.setLayout(layout)
+        self.current3_meter.setMinimumSize(180, 60)
+        self.current3_meter.setValue(50)
+        layout.addWidget(self.current3_meter)
+
+        ##VFD Cap Bank (V) Meter
+        self.voltage2_meter = RectangularMeter(None, "VFD Cap Bank (V)", min_value=0, max_value=700, low_alarm=0, low_warn=50)
+        layout = self.ui.Voltage2.layout()
+        if layout is None:
+            layout = QHBoxLayout(self.ui.Voltage2)
+            self.ui.Voltage2.setLayout(layout)
+        self.voltage2_meter.setMinimumSize(180, 60)
+        self.voltage2_meter.setValue(350)
+        layout.addWidget(self.voltage2_meter)
+
+        ##Supply Temp 22kW Meter
+        self.supply_temp1_meter = RectangularMeter(None, "Supply Temp 22kW", min_value=0, max_value=120, high_alarm=100, high_warn=90)
+        layout = self.ui.SupplyTemp1.layout()
+        if layout is None:
+            layout = QHBoxLayout(self.ui.SupplyTemp1)
+            self.ui.SupplyTemp1.setLayout(layout)
+        self.supply_temp1_meter.setMinimumSize(180, 60)
+        self.supply_temp1_meter.setValue(45)
+        layout.addWidget(self.supply_temp1_meter)
+
+        ##Supply Temp 0.4kW Meter
+        self.supply_temp2_meter = RectangularMeter(None, "Supply Temp 0.4kW", min_value=0, max_value=120, high_alarm=100, high_warn=90)
+        layout = self.ui.SupplyTemp2.layout()
+        if layout is None:
+            layout = QHBoxLayout(self.ui.SupplyTemp2)
+            self.ui.SupplyTemp2.setLayout(layout)
+        self.supply_temp2_meter.setMinimumSize(180, 60)
+        self.supply_temp2_meter.setValue(45)
+        layout.addWidget(self.supply_temp2_meter)
+
+        ##Linear Disp (ft) Meter
+        self.linear_disp_meter = RectangularMeter(None, "Linear Disp (ft)", min_value=0, max_value=120)
+        layout = self.ui.LinearDisp.layout()
+        if layout is None:
+            layout = QHBoxLayout(self.ui.LinearDisp)
+            self.ui.LinearDisp.setLayout(layout)
+        self.linear_disp_meter.setMinimumSize(180, 60)
+        self.linear_disp_meter.setValue(50)
+        layout.addWidget(self.linear_disp_meter)
+
+        ##Deviation (°) Meter
+        self.deviation_meter = RectangularMeter(None, "Deviation (°)", min_value=0, max_value=6, high_alarm=5, high_warn=3)
+        layout = self.ui.Deviation.layout()
+        if layout is None:
+            layout = QHBoxLayout(self.ui.Deviation)
+            self.ui.Deviation.setLayout(layout)
+        self.deviation_meter.setMinimumSize(180, 60)
+        self.deviation_meter.setValue(1.5)
+        layout.addWidget(self.deviation_meter)
+
+        ##Jack Disp (in) Meter
+        self.jack_disp_meter = RectangularMeter(None, "Jack Disp (in)", min_value=0, max_value=35, low_alarm=0, high_alarm=30, low_warn=2, high_warn=24)
+        layout = self.ui.JackDisp.layout()
+        if layout is None:
+            layout = QHBoxLayout(self.ui.JackDisp)
+            self.ui.JackDisp.setLayout(layout)
+        self.jack_disp_meter.setMinimumSize(180, 60)
+        self.jack_disp_meter.setValue(13)
+        layout.addWidget(self.jack_disp_meter)
+
+        ##HPU Inlet (bar) Meter
+        self.hpu_pressure_meter = RectangularMeter(None, "HPU Inlet (bar)", min_value=0, max_value=12, low_alarm=5, high_alarm=10, low_warn=6, high_warn=8)
+        layout = self.ui.HPUPressure.layout()
+        if layout is None:
+            layout = QHBoxLayout(self.ui.HPUPressure)
+            self.ui.HPUPressure.setLayout(layout)
+        self.hpu_pressure_meter.setMinimumSize(180, 60)
+        self.hpu_pressure_meter.setValue(7)
+        layout.addWidget(self.hpu_pressure_meter)
 
     def append_log(self, msg):
         try:
             self.ui.Log.append(msg)
         except:
             print("LOG:", msg)
-    
+   
     def update_meter(self, sid, value):
         mapping = {
             "temp_1": self.temp1_meter,
             "temp_2": self.temp2_meter,
             "temp_3": self.temp3_meter,
-            "voltage_1": self.voltage1_meter,
-            "voltage_2": self.voltage2_meter,
-            "voltage_3": self.voltage3_meter,
+            "temp_4": self.temp4_meter,
+            "gas_1": self.gas_meter,
+            "muck_pressure_1": self.muck_pressure1_meter,
+            "muck_pressure_2": self.muck_pressure2_meter,
+            "cooling_temp_1": self.cooling_temp_meter,
+            "soil_pressure_2": self.soil_pressure2_meter,
             "current_1": self.current1_meter,
             "current_2": self.current2_meter,
-            "flow_1": self.flow_meter,
             "rpm": self.RPM_meter,
+            "voltage_1": self.voltage1_meter,
+            "current_3": self.current3_meter,
+            "voltage_2": self.voltage2_meter,
+            "supply_temp_1": self.supply_temp1_meter,
+            "supply_temp_2": self.supply_temp2_meter,
+            "linear_disp_1": self.linear_disp_meter,
+            "deviation_1": self.deviation_meter,
+            "jack_disp_1": self.jack_disp_meter,
+            "hpu_pressure_1": self.hpu_pressure_meter,
         }
 
         if sid in mapping:
@@ -454,12 +590,15 @@ class OperatorWindow(QMainWindow):
 
 
 class RectangularMeter(QWidget):
-    def __init__(self, parent=None, name="Empty", min_value=0, max_value=100, low_alarm=None, high_alarm=None):
+    def __init__(self, parent=None, name="Empty", min_value=0, max_value=100, low_alarm=None, high_alarm=None, low_warn=None, high_warn=None):
         super().__init__(parent)
         self.min_value = min_value
         self.max_value = max_value
+        # If TBD or N/A, setting to None will disable alarm/warning checks
         self.low_alarm = low_alarm
         self.high_alarm = high_alarm
+        self.low_warn = low_warn
+        self.high_warn = high_warn
         self.name = name
         self.value = 0
 
@@ -482,7 +621,20 @@ class RectangularMeter(QWidget):
         ratio = (self.value - self.min_value) / (self.max_value - self.min_value)
         fill_width = ratio * w
 
-        painter.setBrush(QColor(0, 180, 0))
+        # checks if value is within working range
+        # Pick the fill color: red at/past an alarm limit, yellow at/past a warning
+        if self.low_alarm is not None and self.value <= self.low_alarm:
+            meterColor = QColor(255, 0, 0)
+        elif self.high_alarm is not None and self.value >= self.high_alarm:
+            meterColor = QColor(255, 0, 0)
+        elif self.low_warn is not None and self.value <= self.low_warn:
+            meterColor = QColor(245, 158, 11)
+        elif self.high_warn is not None and self.value >= self.high_warn:
+            meterColor = QColor(245, 158, 11)
+        else:
+            meterColor = QColor(0, 180, 0)
+        # painter.setBrush(QColor(0, 180, 0)) # for testing
+        painter.setBrush(meterColor)
         painter.setPen(Qt.NoPen)
         painter.drawRect(QRectF(0, 0, fill_width, h))
 
@@ -499,17 +651,15 @@ class RectangularMeter(QWidget):
             self.max_value
         ]
 
-        if self.low_alarm is not None:
-            tick_values.append(self.low_alarm)
-        if self.high_alarm is not None:
-            tick_values.append(self.high_alarm)
-
         for v in tick_values:
             x = int((v - self.min_value) / (self.max_value - self.min_value) * w)
             painter.drawLine(x, h / 2, x, h / 2 + 6)
 
             label = f"{v:.1f}".rstrip("0").rstrip(".")
             painter.drawText(x - 10, h - 5, label)
+
+        # Release the painter once drawing is finished
+        painter.end()
 
 
 def main():

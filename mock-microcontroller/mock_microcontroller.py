@@ -50,17 +50,31 @@ StateListener = Callable[[int, bool, str, bool], None]
 # its (lo, hi) band is considered an out-of-range fault — independent of the
 # simulator's own SensorConfig.min_val/max_val (which describe the nominal
 # range used for value generation, not fault detection).
+# Values are (Low Alarm, High Alarm) from the sensor spec table; limits that
+# are N/A or TBD in the table use -inf / inf (never trip).
+_INF = float("inf")
 THRESHOLDS: dict[str, tuple[float, float]] = {
-    "temp_1":    (0.0,   120.0),
-    "temp_2":    (0.0,   120.0),
-    "temp_3":    (0.0,   120.0),
-    "rpm":       (0.0,  6000.0),
-    "voltage_1": (450.0, 510.0),
-    "voltage_2": (110.0, 130.0),
-    "voltage_3": (4.7,   5.3),
-    "current_1": (0.0,   50.0),
-    "current_2": (0.0,   50.0),
-    "flow_1":    (0.0,  100.0),
+    "temp_1":          (0.0,   100.0),
+    "temp_2":          (0.0,   100.0),
+    "temp_3":          (0.0,   100.0),
+    "temp_4":          (0.0,   100.0),
+    "gas_1":           (-_INF,  25.0),
+    "muck_pressure_1": (-_INF,  _INF),   # TBD
+    "muck_pressure_2": (-_INF,  _INF),   # TBD
+    "cooling_temp_1":  (-_INF,  _INF),   # TBD
+    "soil_pressure_2": (15.0,   50.0),
+    "current_1":       (0.0,    55.0),
+    "current_2":       (0.0,    55.0),
+    "rpm":             (-_INF,  _INF),   # high warn 60 only, no alarm
+    "voltage_1":       (400.0, 530.0),
+    "current_3":       (-_INF, 110.0),
+    "voltage_2":       (0.0,    _INF),
+    "supply_temp_1":   (-_INF, 100.0),
+    "supply_temp_2":   (-_INF, 100.0),
+    "linear_disp_1":   (-_INF,  _INF),   # N/A
+    "deviation_1":     (-_INF,   5.0),
+    "jack_disp_1":     (0.0,    30.0),
+    "hpu_pressure_1":  (5.0,    10.0),
 }
 
 

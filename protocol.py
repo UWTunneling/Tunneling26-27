@@ -17,9 +17,21 @@ Message type IDs (first byte of content):
     0x12  Voltage               content = [0x12, sensor_id, value_hi, value_lo]
     0x13  Current               content = [0x13, sensor_id, value_hi, value_lo]
     0x14  Flow                  content = [0x14, sensor_id, value_hi, value_lo]
+    0x15  Gas                   content = [0x15, sensor_id, value_hi, value_lo]
+    0x16  Muck pressure         content = [0x16, sensor_id, value_hi, value_lo]
+    0x17  Soil treat. pressure  content = [0x17, sensor_id, value_hi, value_lo]
+    0x18  Cooling temperature   content = [0x18, sensor_id, value_hi, value_lo]
+    0x19  Drive supply temp     content = [0x19, sensor_id, value_hi, value_lo]
+    0x1A  Linear displacement   content = [0x1A, sensor_id, value_hi, value_lo]
+    0x1B  Direction deviation   content = [0x1B, sensor_id, value_hi, value_lo]
+    0x1C  Jack displacement     content = [0x1C, sensor_id, value_hi, value_lo]
+    0x1D  HPU inlet pressure    content = [0x1D, sensor_id, value_hi, value_lo]
 
 Sensor messages (0x1X) carry a 16-bit unsigned value in network byte order (big-endian).
 Scale factors: temperature ×0.01 °C, voltage ×0.01 V, current ×0.01 A, flow ×0.01 L/min,
+               gas ×0.01 %LEL, muck/soil pressure ×0.01 PSI, cooling temp ×0.01 °F,
+               supply temp ×0.01 °C, linear displacement ×0.01 ft, deviation ×0.01 °,
+               jack displacement ×0.01 in, HPU pressure ×0.01 bar,
                RPM is an integer (scale ×1).
 
 State transition messages (0x02):
@@ -43,6 +55,15 @@ MSG_RPM              = 0x11
 MSG_VOLTAGE          = 0x12
 MSG_CURRENT          = 0x13
 MSG_FLOW             = 0x14
+MSG_GAS              = 0x15
+MSG_MUCK_PRESSURE    = 0x16
+MSG_SOIL_PRESSURE    = 0x17
+MSG_COOLING_TEMP     = 0x18
+MSG_SUPPLY_TEMP      = 0x19
+MSG_LINEAR_DISP      = 0x1A
+MSG_DEVIATION        = 0x1B
+MSG_JACK_DISP        = 0x1C
+MSG_HPU_PRESSURE     = 0x1D
 
 # State transition reason codes
 STATE_BOOTUP          = 0x00
@@ -60,6 +81,15 @@ _TYPE_NAMES: dict[int, str] = {
     MSG_VOLTAGE:     "voltage",
     MSG_CURRENT:     "current",
     MSG_FLOW:        "flow",
+    MSG_GAS:           "gas",
+    MSG_MUCK_PRESSURE: "muck_pressure",
+    MSG_SOIL_PRESSURE: "soil_pressure",
+    MSG_COOLING_TEMP:  "cooling_temp",
+    MSG_SUPPLY_TEMP:   "supply_temp",
+    MSG_LINEAR_DISP:   "linear_disp",
+    MSG_DEVIATION:     "deviation",
+    MSG_JACK_DISP:     "jack_disp",
+    MSG_HPU_PRESSURE:  "hpu_pressure",
 }
 
 # Scale factor to convert raw uint16 → physical value
@@ -69,6 +99,15 @@ _SCALE: dict[int, float] = {
     MSG_VOLTAGE:     0.01,
     MSG_CURRENT:     0.01,
     MSG_FLOW:        0.01,
+    MSG_GAS:           0.01,
+    MSG_MUCK_PRESSURE: 0.01,
+    MSG_SOIL_PRESSURE: 0.01,
+    MSG_COOLING_TEMP:  0.01,
+    MSG_SUPPLY_TEMP:   0.01,
+    MSG_LINEAR_DISP:   0.01,
+    MSG_DEVIATION:     0.01,
+    MSG_JACK_DISP:     0.01,
+    MSG_HPU_PRESSURE:  0.01,
 }
 
 _UNIT: dict[int, str] = {
@@ -77,6 +116,15 @@ _UNIT: dict[int, str] = {
     MSG_VOLTAGE:     "V",
     MSG_CURRENT:     "A",
     MSG_FLOW:        "L/min",
+    MSG_GAS:           "%LEL",
+    MSG_MUCK_PRESSURE: "PSI",
+    MSG_SOIL_PRESSURE: "PSI",
+    MSG_COOLING_TEMP:  "°F",
+    MSG_SUPPLY_TEMP:   "°C",
+    MSG_LINEAR_DISP:   "ft",
+    MSG_DEVIATION:     "°",
+    MSG_JACK_DISP:     "in",
+    MSG_HPU_PRESSURE:  "bar",
 }
 
 # Reverse lookup: sensor type name → message type byte (excludes non-sensor types)
@@ -125,7 +173,10 @@ def encode(sensor_type: str, sensor_number: int, value: float) -> bytes:
     """Encode one sensor reading as a full protocol frame.
 
     Args:
-        sensor_type:   one of "temperature", "rpm", "voltage", "current", "flow"
+        sensor_type:   one of "temperature", "rpm", "voltage", "current", "flow",
+                       "gas", "muck_pressure", "soil_pressure", "cooling_temp",
+                       "supply_temp", "linear_disp", "deviation", "jack_disp",
+                       "hpu_pressure"
         sensor_number: 1-based sensor index (e.g. 1, 2, 3)
         value:         physical reading in natural units
                        (°C for temperature, rpm for RPM, V for voltage,
@@ -389,6 +440,51 @@ def encode_current(sensor_id: int, amps: float) -> bytes:
 def encode_flow(sensor_id: int, liters_per_min: float) -> bytes:
     """Encode a flow rate in L/min as a protocol frame (resolution 0.01 L/min)."""
     return build_sensor(MSG_FLOW, sensor_id, round(liters_per_min * 100))
+
+
+def encode_gas(sensor_id: int, percent_lel: float) -> bytes:
+    """Encode a gas reading in % LEL as a protocol frame (resolution 0.01 %LEL)."""
+    return build_sensor(MSG_GAS, sensor_id, round(percent_lel * 100))
+
+
+def encode_muck_pressure(sensor_id: int, psi: float) -> bytes:
+    """Encode a muck pressure in PSI as a protocol frame (resolution 0.01 PSI)."""
+    return build_sensor(MSG_MUCK_PRESSURE, sensor_id, round(psi * 100))
+
+
+def encode_soil_pressure(sensor_id: int, psi: float) -> bytes:
+    """Encode a soil treatment pressure in PSI as a protocol frame (resolution 0.01 PSI)."""
+    return build_sensor(MSG_SOIL_PRESSURE, sensor_id, round(psi * 100))
+
+
+def encode_cooling_temp(sensor_id: int, fahrenheit: float) -> bytes:
+    """Encode a cooling temperature in °F as a protocol frame (resolution 0.01 °F)."""
+    return build_sensor(MSG_COOLING_TEMP, sensor_id, round(fahrenheit * 100))
+
+
+def encode_supply_temp(sensor_id: int, celsius: float) -> bytes:
+    """Encode a drive supply temperature in °C as a protocol frame (resolution 0.01 °C)."""
+    return build_sensor(MSG_SUPPLY_TEMP, sensor_id, round(celsius * 100))
+
+
+def encode_linear_disp(sensor_id: int, feet: float) -> bytes:
+    """Encode a linear displacement in ft as a protocol frame (resolution 0.01 ft)."""
+    return build_sensor(MSG_LINEAR_DISP, sensor_id, round(feet * 100))
+
+
+def encode_deviation(sensor_id: int, degrees: float) -> bytes:
+    """Encode a deviation from nominal direction in ° as a protocol frame (resolution 0.01 °)."""
+    return build_sensor(MSG_DEVIATION, sensor_id, round(degrees * 100))
+
+
+def encode_jack_disp(sensor_id: int, inches: float) -> bytes:
+    """Encode a hydraulic jack displacement in inches as a protocol frame (resolution 0.01 in)."""
+    return build_sensor(MSG_JACK_DISP, sensor_id, round(inches * 100))
+
+
+def encode_hpu_pressure(sensor_id: int, bar: float) -> bytes:
+    """Encode an HPU inlet pressure in bar as a protocol frame (resolution 0.01 bar)."""
+    return build_sensor(MSG_HPU_PRESSURE, sensor_id, round(bar * 100))
 
 
 # ---------------------------------------------------------------------------
