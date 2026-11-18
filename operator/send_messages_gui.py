@@ -26,6 +26,13 @@ SENSOR_IDS = (
 )
 
 
+IO_TIMEOUT_S = 10.0
+IO_TIMEOUT_POLL_S = 0.5
+CRITICAL_SENSORS = (
+    "temp_1", "temp_2", "temp_3",
+    "rpm",
+)
+
 def _sensor_key(msg_type: str, sensor_id: int) -> str | None:
     if msg_type == "temperature":
         return f"temp_{sensor_id}"
@@ -81,6 +88,12 @@ class OperatorBackend:
         # Timers (thread-based, not Tkinter)
         self._stop_timers = False
 
+        self._io_lock = threading.Lock()
+        self._io_last_rx = {sid: None for sid in CRITICAL_SENSORS}
+        self._io_armed_at = None
+        self._io_tripped = None
+        self._io_generation = 0
+
     # ------------------------------------------------------------
     # Connection
     # ------------------------------------------------------------
@@ -109,6 +122,11 @@ class OperatorBackend:
         threading.Thread(target=self._heartbeat_loop, daemon=True).start()
         threading.Thread(target=self._connection_health_loop, daemon=True).start()
         threading.Thread(target=self._heartbeat_health_loop, daemon=True).start()
+
+        self._io_arm()
+        threading.Thread(
+            target=self._io_timeout_loop, args=(self._io_generation,), daemon=True
+        ).start()
 
         return True
 
@@ -187,6 +205,10 @@ class OperatorBackend:
         value = msg["value"]
         self.sensor_state[sid] = value
 
+        if sid in self._io_last_rx:
+            with self._io_lock:
+                self._io_last_rx[sid] = time.monotonic()
+
         self.on_sensor_update(sid, value)
 
     # ------------------------------------------------------------
@@ -231,6 +253,60 @@ class OperatorBackend:
                 self.sock.sendall(protocol.encode_comm_fail())
             except:
                 pass
+   # ------------------------------------------------------------
+    # IO timeout interlock
+    # ------------------------------------------------------------
+    def _io_arm(self):
+        """Start (or restart) all Critical sensor timers. Called on connect.
+
+        Timers start at arm time, so a Critical sensor that never reports
+        at all also trips after IO_TIMEOUT_S."""
+        with self._io_lock:
+            self._io_generation += 1
+            self._io_armed_at = time.monotonic()
+            self._io_last_rx = {sid: None for sid in CRITICAL_SENSORS}
+            self._io_tripped = None
+
+    def io_stale_sensors(self):
+        """Return {sensor_id: age_s} for Critical sensors past IO_TIMEOUT_S.
+
+        age_s is inf for a sensor that has not reported since arming.
+        """
+        now = time.monotonic()
+        stale = {}
+        with self._io_lock:
+            if self._io_armed_at is None:
+                return stale
+            for sid, t in self._io_last_rx.items():
+                ref = t if t is not None else self._io_armed_at
+                if now - ref > IO_TIMEOUT_S:
+                    stale[sid] = (now - t) if t is not None else float("inf")
+        return stale
+
+    def _io_timeout_loop(self, generation):
+        while not self._stop_timers and generation == self._io_generation:
+            if self.sock and self._io_tripped is None:
+                stale = self.io_stale_sensors()
+                if stale:
+                    sid, age = next(iter(stale.items()))
+                    with self._io_lock:
+                        self._io_tripped = (sid, age)
+                    self._io_trip(sid, age, stale)
+            time.sleep(IO_TIMEOUT_POLL_S)
+
+    def _io_trip(self, sid, age, stale):
+        """Latch the interlock and command a software stop."""
+        age_txt = "no reading since connect" if age == float("inf") else f"{age:.1f}s"
+        others = [s for s in stale if s != sid]
+        extra = f" (also stale: {', '.join(others)})" if others else ""
+        self.on_log(f"IO TIMEOUT INTERLOCK: {sid} — {age_txt}{extra} — stopping.")
+
+        self.software_stop()
+
+        reason = f"IO timeout: {sid}"
+        self.current_mcu_state = "stop"
+        self.current_reason = reason
+        self.on_state_change("stop", reason)
 
     # ------------------------------------------------------------
     # Commands
@@ -238,6 +314,19 @@ class OperatorBackend:
     def software_start(self):
         if not self.sock:
             return
+
+        if self._io_tripped is not None:
+            stale = self.io_stale_sensors()
+            if stale:
+                self.on_log(
+                    "Start blocked — IO timeout interlock active, stale: "
+                    + ", ".join(stale)
+                )
+                return
+            with self._io_lock:
+                self._io_tripped = None
+            self.on_log("IO timeout interlock cleared — all Critical sensors reporting.") 
+            
         try:
             self.sock.sendall(protocol.encode_running())
             self.on_log("Sent: Software Start")
